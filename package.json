@@ -1,0 +1,35 @@
+{
+  "name": "shinobi-plugin-example",
+  "version": "0.1.0",
+  "description": "Reference Shinobi plugin — exports a Shinobi project as a single Markdown brief via mcp__shinobi__plugin_export_markdown.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "shinobi",
+    "shinobi-plugin",
+    "mcp",
+    "claude-code",
+    "ai-agents"
+  ],
+  "author": "Tomislav Krizan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git"
+  },
+  "homepage": "https://github.com/numbererikson/shinobi-plugin-example#readme",
+  "peerDependencies": {
+    "@shinobiapps/shinobi": ">=0.1.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
