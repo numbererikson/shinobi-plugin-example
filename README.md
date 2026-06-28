@@ -1,152 +1,108 @@
-# @shinobi/plugin-fitness
+# shinobi-plugin-example
 
-A standalone, publishable Shinobi plugin that demonstrates **long-term adaptive
-mission state**. It is the reference implementation for Shinobi's writable,
-per-plugin state store (`registry.state`).
+Reference Shinobi plugin. Forks of this repo are the recommended starting
+point for any custom MCP tool you want to wire into Shinobi.
 
-The point is not to be a fitness app. It is to show that Shinobi can persist
-structured state across time while an LLM reasons over that state and adapts
-recommendations. The first mission is: *get visible abs in 180 days while
-staying smoke-free and alcohol-free.*
+Registers one tool: **`plugin_export_markdown`**. Pass a `project_id`,
+get back a single Markdown brief that includes the project header,
+subtasks grouped by status, decisions, dead ends, notes, and per-project
+context. Useful for handoff docs, status summaries, or pasting into
+Slack.
 
-The package depends only on the plugin **contract** (declared locally in
-[`src/types.ts`](src/types.ts)), never on Shinobi internals — the host supplies
-the concrete, SQLite-backed state store at load time.
+## Plugins in this repo
 
-## Division of labour
+| Plugin | Path | What it shows |
+| --- | --- | --- |
+| `shinobi-plugin-example` | root (`index.mjs`) | Minimal read-only plugin — one tool over the read-only `ShinobiApi`. |
+| `@shinobi/plugin-fitness` | [`fitness/`](fitness/) | Stateful reference plugin — 7 tools over the writable `registry.state` store, in TypeScript with a build + tests. |
 
-- **Shinobi owns truth** — durable state in SQLite via `registry.state`.
-- **The plugin owns state** — it returns structured facts, restrictions,
-  message codes, IDs and snapshots. It never returns coaching, motivation, or
-  exercise explanations.
-- **The LLM owns language** — it maps workout IDs and message codes to words.
+Each is its own publishable npm package. For a brand-new plugin the usual
+pattern is its own repo; the two here live together only because this repo is
+the shared **example/template**.
 
 ## Install
 
-This package is loaded by Shinobi's plugin discovery, which scans `node_modules`
-for packages named `@shinobi/plugin-*` or `shinobi-plugin-*` and imports the
-package `exports`/`main` entry.
+This package follows the auto-discovery naming convention
+(`shinobi-plugin-*`), so Shinobi finds it without any config once it's
+in `node_modules`.
 
 ```bash
-npm install @shinobi/plugin-fitness
+# From npm (after the package is published)
+npm install -g shinobi-plugin-example
+
+# Or from this repo (recommended while iterating)
+npm install -g github:numbererikson/shinobi-plugin-example
 ```
 
-The default export is `register(registry, api)`. Shinobi calls it with a
-`registry` that provides `registerTool(...)` and a scoped, writable `state`
-store.
+Restart your MCP client and `mcp__shinobi__plugin_export_markdown`
+becomes available.
 
-## Tools
+Verify it loaded:
 
-| Tool | Purpose |
-| --- | --- |
-| `plugin_fitness_create` | Create a `fitness_180` mission |
-| `plugin_fitness_today` | Today's day, phase, workout ID, restrictions, streaks, rules |
-| `plugin_fitness_log_workout` | Record a completed/skipped workout |
-| `plugin_fitness_log_pain` | Record pain (0-10) and update restrictions |
-| `plugin_fitness_log_weight` | Record weight/waist and delta from start |
-| `plugin_fitness_set_equipment` | Update equipment and enabled workout families |
-| `plugin_fitness_status` | Full mission status + progress summary |
-
-Tool names are lowercase `snake_case`, matching the registration regex
-`/^plugin_[a-z][a-z0-9_]*$/`.
-
-Workout IDs (e.g. `phase1_fullbody_a`, `phase1_legs_core`,
-`phase2_bench_dumbbell_a`) and restriction message codes (e.g.
-`NO_HEAVY_OVERHEAD_PRESSING`, `SHOULDER_PAIN_HIGH`) are stable contracts the LLM
-translates into instructions.
-
-## Demo flow
-
-This is the flow exercised by `src/fitness.test.ts`:
-
-1. User creates a 180-day mission.
-2. Plugin stores smoke-free and alcohol-free start dates.
-3. User logs an old right-shoulder issue (`restrictions.shoulder = watch`).
-4. `plugin_fitness_today` → `phase1_fullbody_a` with a `NO_HEAVY_OVERHEAD_PRESSING` watch.
-5. User logs shoulder pain `5/10` → restriction escalates to `avoid`.
-6. Next `plugin_fitness_today` → `phase1_legs_core` with `SHOULDER_PAIN_HIGH`.
-7. User adds a bench + dumbbells (`set_equipment` `bench_dumbbells`).
-8. Plugin enables the `phase2_bench_dumbbell` family.
-9. The LLM explains the workout using the plugin's structured state — e.g.
-   *"Today we skip push and overhead work; do legs and core only. Your right
-   shoulder was 5/10, so keep the streak alive without irritating it."* The
-   plugin never returns that sentence.
-
-Example `plugin_fitness_today` payload (LLM input, not LLM output):
-
-```json
-{
-  "exists": true,
-  "missionId": "mission_abc",
-  "day": 10,
-  "phase": { "number": 1, "name": "foundation", "startedAt": "2026-06-18" },
-  "workoutId": "phase1_legs_core",
-  "restrictions": [
-    { "area": "shoulder", "side": "right", "level": "avoid", "messageCode": "SHOULDER_PAIN_HIGH" }
-  ],
-  "streaks": { "smokeFreeDays": 27, "alcoholFreeDays": 27, "workoutStreakDays": 0 },
-  "rules": { "trainToFailure": false, "repsInReserve": 2, "maxPainAllowed": 4 }
-}
+```text
+mcp__shinobi__plugin_hello
 ```
 
-## Deterministic rules
+The response lists every discovered plugin and the tools it registered.
+You should see `shinobi-plugin-example` with one tool.
 
-- **Pain** (`src/rules.ts`): `0-2` normal, `3-4` caution, `5+` avoid. High
-  shoulder pain replaces any push day with `phase1_legs_core`.
-- **Phases** by mission day: foundation `1-30`, base_strength `31-75`,
-  progressive_strength `76-135`, definition `136-180`. Advancement is delayed
-  while consistency is low (<4 workouts/14 days), a high-pain restriction is
-  active, or the mission is paused.
-- **Equipment** gates workout families; dumbbell families unlock only once a
-  bench *and* dumbbells are present.
+## Use
 
-Every rule is a pure function — no IO, no randomness, no language — which is why
-the LLM is the only source of words and the plugin is fully testable.
+From your MCP client:
 
-## Persistence
-
-State is a single JSON object under `registry.state` key `mission`
-(`FitnessPluginState`, `version: 1`). On the host it lives in Shinobi's SQLite
-DB, so it is covered by the pre-migration backup and `shinobi sync`, and works
-behind the stateless remote `/mcp` endpoint. Read-modify-write goes through
-`registry.state.update(...)` so concurrent calls stay atomic. A malformed or
-absent value reads back as "no mission" rather than throwing.
-
-## The plugin contract
-
-This package never imports Shinobi internals. It declares the contract locally:
-
-```ts
-interface PluginStateStore {
-  get<T>(key: string): T | null;
-  set(key: string, value: unknown): void;
-  delete(key: string): void;
-  update<T>(key: string, mutator: (current: T | null) => T): T;
-}
-
-interface PluginRegistry {
-  registerTool(def: PluginToolDef): void;
-  state: PluginStateStore; // scoped to this plugin
-}
+```text
+mcp__shinobi__plugin_export_markdown { "project_id": 1 }
 ```
 
-A plugin module's default export is `register(registry, api)`. The host owns the
-SQLite-backed implementation; the package depends only on this shape.
+Pipe the returned `markdown` into a file:
 
-## Development
-
-```bash
-npm install
-npm run build   # tsc → ./dist
-npm test        # vitest run
+```text
+"Export project 1 as Markdown and save it to ./project-1-brief.md"
 ```
 
-## Notes / out of scope
+The agent calls the tool, takes the `markdown` field, and writes the
+file.
 
-The plugin does not give medical advice and does not replace a trainer, doctor,
-physiotherapist, or dentist. No wearables, nutrition, video, React, external
-APIs, or LLM calls live inside it — by design.
+## How it works
+
+This plugin uses the read-only `ShinobiApi` facade Shinobi passes to
+every plugin's `register` function. The full available surface is
+documented in
+[docs/plugin-development.md](https://github.com/numbererikson/shinobi/blob/main/docs/plugin-development.md)
+in the main Shinobi repo. The plugin pulls:
+
+- `api.getProject(id)` — project header
+- `api.listSubtasks({ projectId })` — every task with status + priority
+- `api.listDecisions({ projectId, limit: 20 })` — recent decisions
+- `api.listDeadEnds({ projectId, limit: 20 })` — recent dead ends
+- `api.listNotes({ projectId, limit: 20 })` — recent notes
+- `api.getContext(id)` — conventions, don't-touch list, deploy notes
+
+…and renders them as one Markdown document.
+
+Plugins are **read-only** by design. If you need a tool that writes to
+Shinobi state, the right pattern is for the tool to return a structured
+plan ("here's what I'd write") and have the LLM call a built-in tool
+like `log_decision` or `create_task` to do the actual write. Built-in
+tools have audit logging, schema validation, and the activity timeline
+hook; plugin writes would bypass all of that.
+
+## Fork it
+
+This repo is intentionally minimal. To build your own plugin:
+
+1. Fork or clone this repo.
+2. Rename in `package.json` (must start with `shinobi-plugin-` for
+   auto-discovery).
+3. Rewrite `index.mjs` — keep the `export default function register`
+   signature.
+4. Update `description` and `keywords` in `package.json`.
+5. `npm install -g .` to test locally; publish when ready.
+
+The `peerDependencies` entry pins to `@shinobiapps/shinobi >=0.1.3`
+because the plugin API contract stabilized in that release. Future
+breaking changes will be reflected in a peer-dep bump.
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).

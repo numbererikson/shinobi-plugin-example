@@ -1,33 +1,23 @@
 {
-  "name": "@shinobi/plugin-fitness",
-  "version": "0.2.0",
-  "description": "Reference Shinobi plugin — long-term adaptive fitness mission state (fitness_180) over the writable per-plugin state store. Structured facts only; the LLM owns the language.",
+  "name": "shinobi-plugin-example",
+  "version": "0.1.0",
+  "description": "Reference Shinobi plugin — exports a Shinobi project as a single Markdown brief via mcp__shinobi__plugin_export_markdown.",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "index.mjs",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+    ".": "./index.mjs"
   },
   "files": [
-    "dist",
+    "index.mjs",
     "README.md",
     "LICENSE"
   ],
-  "scripts": {
-    "build": "tsc",
-    "test": "vitest run",
-    "prepublishOnly": "npm run build"
-  },
   "keywords": [
     "shinobi",
     "shinobi-plugin",
     "mcp",
     "claude-code",
-    "ai-agents",
-    "fitness"
+    "ai-agents"
   ],
   "author": "Tomislav Krizan",
   "license": "MIT",
@@ -36,9 +26,8 @@
     "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git"
   },
   "homepage": "https://github.com/numbererikson/shinobi-plugin-example#readme",
-  "devDependencies": {
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+  "peerDependencies": {
+    "@shinobiapps/shinobi": ">=0.1.3"
   },
   "engines": {
     "node": ">=18"
