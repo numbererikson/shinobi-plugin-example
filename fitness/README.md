@@ -35,6 +35,26 @@ The default export is `register(registry, api)`. Shinobi calls it with a
 `registry` that provides `registerTool(...)` and a scoped, writable `state`
 store.
 
+> **Requires** a Shinobi host that exposes `registry.state` (the writable
+> per-plugin state store). On older hosts the tools register but every call
+> fails because `registry.state` is undefined.
+
+### Quick install on a server (single file, no npm)
+
+For a self-hosted Shinobi (e.g. on a VM), the simplest path is the prebuilt
+single-file bundle in [`standalone/`](standalone/). Shinobi's discovery loads
+any `.mjs`/`.js` file in `~/.shinobi/plugins/` directly:
+
+```bash
+# on the Shinobi host
+mkdir -p ~/.shinobi/plugins
+curl -fsSL -o ~/.shinobi/plugins/shinobi-plugin-fitness.mjs \
+  https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs
+# then restart Shinobi — the 7 plugin_fitness_* tools load at startup
+```
+
+Regenerate the bundle after changing sources with `npm run bundle`.
+
 ## Tools
 
 | Tool | Purpose |

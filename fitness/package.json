@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "bundle": "npm run build && node scripts/bundle.mjs",
     "test": "vitest run",
     "prepare": "tsc",
     "prepublishOnly": "npm run build"
