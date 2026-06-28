@@ -1,4 +1,4 @@
-// Live demo of @shinobi/plugin-fitness against the compiled dist.
+// Live demo of shinobi-plugin-fitness against the compiled dist.
 // Uses a tiny in-memory fake of registry.state (the real host uses SQLite).
 import register from './dist/index.js';
 
@@ -8,7 +8,7 @@ function mount(b=new Map()){const tools=new Map();register({registerTool:d=>tool
 const call = mount();
 const show = (label, v) => console.log(`\n▶ ${label}\n` + JSON.stringify(v, null, 2));
 
-console.log('=== @shinobi/plugin-fitness — live demo ===');
+console.log('=== shinobi-plugin-fitness — live demo ===');
 
 show('plugin_fitness_create (180-day mission, smoke/alcohol-free, old shoulder)', await call('plugin_fitness_create', {
   goal:'visible_abs', smokeFreeSince:'2026-06-01', alcoholFreeSince:'2026-06-01',

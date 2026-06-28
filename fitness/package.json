@@ -1,5 +1,5 @@
 {
-  "name": "@shinobi/plugin-fitness",
+  "name": "shinobi-plugin-fitness",
   "version": "0.2.0",
   "description": "Reference Shinobi plugin — long-term adaptive fitness mission state (fitness_180) over the writable per-plugin state store. Structured facts only; the LLM owns the language.",
   "type": "module",
@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
+    "prepare": "tsc",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

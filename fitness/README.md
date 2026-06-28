@@ -1,4 +1,4 @@
-# @shinobi/plugin-fitness
+# shinobi-plugin-fitness
 
 A standalone, publishable Shinobi plugin that demonstrates **long-term adaptive
 mission state**. It is the reference implementation for Shinobi's writable,
@@ -28,7 +28,7 @@ for packages named `@shinobi/plugin-*` or `shinobi-plugin-*` and imports the
 package `exports`/`main` entry.
 
 ```bash
-npm install @shinobi/plugin-fitness
+npm install shinobi-plugin-fitness
 ```
 
 The default export is `register(registry, api)`. Shinobi calls it with a
