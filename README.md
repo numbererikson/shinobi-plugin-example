@@ -9,6 +9,17 @@ subtasks grouped by status, decisions, dead ends, notes, and per-project
 context. Useful for handoff docs, status summaries, or pasting into
 Slack.
 
+## Plugins in this repo
+
+| Plugin | Path | What it shows |
+| --- | --- | --- |
+| `shinobi-plugin-example` | root (`index.mjs`) | Minimal read-only plugin — one tool over the read-only `ShinobiApi`. |
+| `shinobi-plugin-fitness` | [`fitness/`](fitness/) | Stateful reference plugin — 7 tools over the writable `registry.state` store, in TypeScript with a build + tests. |
+
+Each is its own publishable npm package. For a brand-new plugin the usual
+pattern is its own repo; the two here live together only because this repo is
+the shared **example/template**.
+
 ## Install
 
 This package follows the auto-discovery naming convention
