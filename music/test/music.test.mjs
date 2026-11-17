@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 
-import register, { quote, parseSongs, mpdConfigFromEnv } from '../shinobi-plugin-music.mjs';
+import register, { quote, parseSongs, mpdConfigFromEnv, fold, matchFolders } from '../shinobi-plugin-music.mjs';
 
 // ---- Fake MPD ---------------------------------------------------------------
 // Speaks enough of the protocol for the plugin: greeting, OK/ACK framing,
@@ -13,6 +13,12 @@ const LIBRARY = [
   { file: 'Thompson/Lijepa li si.mp3', artist: 'Marko Perković Thompson', title: 'Lijepa li si', album: 'Bilo jednom u Hrvatskoj', genre: 'Rock' },
   { file: 'Led Zeppelin/Kashmir.mp3', artist: 'Led Zeppelin', title: 'Kashmir', album: 'Physical Graffiti', genre: 'Rock' },
   { file: 'Pop/Untagged song.mp3' },
+  { file: 'Pop/Đorđe Balašević/Ne lomite mi bagrenje.mp3' },
+  { file: 'Rap/Eminem/Lose Yourself.mp3' },
+  { file: 'Rap/Eminem/Rock Bottom.mp3' },
+  { file: 'Rap/2Pac/Changes.mp3' },
+  { file: 'Trap/Some Trap Song.mp3' },
+  { file: 'Domoljubne/Bojna Čavoglave (live).mp3' },
 ];
 
 const freshOutputs = () => [
@@ -135,6 +141,19 @@ function execute(cmd) {
     }
     case 'update':
       return { lines: ['updating_db: 7'] };
+    case 'listall': {
+      const dirs = new Set();
+      for (const s of LIBRARY) {
+        const parts = s.file.split('/').slice(0, -1);
+        for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+      }
+      return { lines: [...[...dirs].map((d) => `directory: ${d}`), ...LIBRARY.map((s) => `file: ${s.file}`)] };
+    }
+    case 'random':
+    case 'single':
+    case 'repeat':
+      server[name] = rest;
+      return { lines: [] };
     default:
       return { ack: `[5@0] {${name}} unknown command "${name}"` };
   }
@@ -274,6 +293,7 @@ test('free-text query falls back to the file path for untagged files', async () 
   const { call } = loadTools();
   const res = await call('plugin_music_play', { query: 'untagged' });
   assert.equal(res.found, 1);
+  assert.ok(server.log.includes('search any "untagged"'), 'tags are tried before the path');
   assert.equal(res.matchedOn, 'file path');
   assert.equal(res.current.file, 'Pop/Untagged song.mp3');
 });
@@ -435,4 +455,63 @@ test('output switches between the speaker and the phone stream', async () => {
   assert.deepEqual(res.outputs.map((o) => o.enabled), [true, true]);
 
   await assert.rejects(call('plugin_music_output', { target: 'kuhinja' }), /no output matches/);
+});
+
+test('a genre folder plays everything below it, subfolders included', async () => {
+  const { call } = loadTools();
+  const res = await call('plugin_music_play', { query: 'rap' });
+  assert.equal(res.matchedOn, 'folder');
+  assert.equal(res.found, 3);
+  assert.deepEqual(server.queue.map((s) => s.file).sort(), ['Rap/2Pac/Changes.mp3', 'Rap/Eminem/Lose Yourself.mp3', 'Rap/Eminem/Rock Bottom.mp3']);
+  assert.ok(!server.queue.some((s) => s.file.startsWith('Trap/')), 'an exact folder name beats a substring');
+});
+
+test('an artist folder plays only that artist', async () => {
+  const { call } = loadTools();
+  const res = await call('plugin_music_play', { artist: 'Eminem' });
+  assert.equal(res.matchedOn, 'folder');
+  assert.equal(res.found, 2);
+  assert.ok(server.queue.every((s) => s.file.startsWith('Rap/Eminem/')));
+});
+
+test('folder names match without diacritics', async () => {
+  const { call } = loadTools();
+  const res = await call('plugin_music_play', { query: 'dorde balasevic' });
+  assert.equal(res.matchedOn, 'folder');
+  assert.equal(res.current.file, 'Pop/Đorđe Balašević/Ne lomite mi bagrenje.mp3');
+});
+
+test('a song title in a file name does not hijack a genre request', async () => {
+  const { call } = loadTools();
+  const res = await call('plugin_music_play', { genre: 'rock' });
+  // No Rock/ folder here, so tags decide: the three Rock-tagged songs, not "Rock Bottom.mp3".
+  assert.equal(res.matchedOn, 'tags');
+  assert.equal(res.found, 3);
+});
+
+test('untagged artist and title are found in the path, diacritics ignored', async () => {
+  const { call } = loadTools();
+  const res = await call('plugin_music_play', { artist: 'eminem', title: 'lose yourself' });
+  assert.equal(res.matchedOn, 'file path');
+  assert.equal(res.current.file, 'Rap/Eminem/Lose Yourself.mp3');
+  const live = await call('plugin_music_play', { query: 'cavoglave live' });
+  assert.equal(live.current.file, 'Domoljubne/Bojna Čavoglave (live).mp3');
+});
+
+test('a shuffled queue plays each song once, then starts over', async () => {
+  const { call } = loadTools();
+  await call('plugin_music_play', { query: 'rap' });
+  const tail = server.log.slice(server.log.indexOf('shuffle'));
+  assert.deepEqual(tail.slice(0, 5), ['shuffle', 'random 0', 'single 0', 'repeat 1', 'play']);
+});
+
+test('fold lowercases and strips Croatian diacritics', () => {
+  assert.equal(fold('Čavoglave Đorđe Šćepan Žuti'), 'cavoglave dorde scepan zuti');
+});
+
+test('matchFolders prefers an exact folder name and returns nothing for a file-name hit', () => {
+  const files = ['Rock/A/x.mp3', 'Rock/B/y.mp3', 'Punk Rock/z.mp3', 'Rap/Rock Bottom.mp3'];
+  assert.deepEqual(matchFolders(files, 'rock'), ['Rock/A/x.mp3', 'Rock/B/y.mp3']);
+  assert.deepEqual(matchFolders(files, 'punk'), ['Punk Rock/z.mp3']);
+  assert.deepEqual(matchFolders(files, 'bottom'), []);
 });

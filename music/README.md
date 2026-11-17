@@ -23,10 +23,37 @@ runtime dependencies** — it speaks the MPD text protocol over `node:net`.
 | `plugin_music_output` | List outputs, or choose where music plays (`target` substring; `only` or `add`) |
 | `plugin_music_rescan` | Rescan the music folder after adding files |
 
-Matching is a case-insensitive substring match, so "thompson" finds "Marko
-Perković Thompson". If tags give nothing, free-text and genre terms are retried
-against the file path, so an untagged `Rock/Some band - Song.mp3` still plays
-for "rock". A search with no match leaves the current queue untouched.
+### Folders decide what "play rock" means
+
+Organise the music folder as `Genre/Artist/song.mp3`:
+
+```
+Muzika/
+  Rock/
+    Led Zeppelin/
+    AC-DC/
+  Rap/
+    Eminem/
+    2Pac/
+  Domoljubne/
+    Thompson/
+```
+
+A single term is looked up as a folder name first, and plays everything below
+it: "rock" plays all of `Rock/` (every artist), "led zeppelin" only
+`Rock/Led Zeppelin/`, "rap" all of `Rap/`, "eminem" only `Rap/Eminem/`. A folder
+whose name equals the term beats one that merely contains it ("rap" never picks
+`Trap/`), and a song called "Rock Bottom" does not turn a "rock" request into one
+song.
+
+If no folder matches, MPD's tag search runs (artist, title, album, genre), then
+every spoken word is looked for in the file path, so untagged downloads still
+play: artist "thompson" + title "cavoglave" finds
+`Domoljubne/Thompson/Bojna Čavoglave.mp3`. Matching ignores case and Croatian
+diacritics. A search with no match leaves the current queue untouched.
+
+**No repeats.** The queue is shuffled once and played in order, so every song
+plays once before any song comes back; then the whole list starts over.
 
 **Nothing is ever deleted.** The plugin only speaks the MPD protocol, which has
 no way to remove files. "Dislike" puts the song on a banned list kept in
