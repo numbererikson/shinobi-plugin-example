@@ -15,9 +15,10 @@ Slack.
 | --- | --- | --- |
 | `shinobi-plugin-example` | root (`index.mjs`) | Minimal read-only plugin — one tool over the read-only `ShinobiApi`. |
 | `shinobi-plugin-fitness` | [`fitness/`](fitness/) | Stateful reference plugin — 7 tools over the writable `registry.state` store, in TypeScript with a build + tests. |
+| `shinobi-plugin-music` | [`music/`](music/) | Single-file, zero-dependency plugin — 6 tools that drive a local MPD player (play by artist/song/genre, pause, skip, volume, library). |
 
 Each is its own publishable npm package. For a brand-new plugin the usual
-pattern is its own repo; the two here live together only because this repo is
+pattern is its own repo; the plugins here live together only because this repo is
 the shared **example/template**.
 
 ## Install

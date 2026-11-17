@@ -1,0 +1,35 @@
+{
+  "name": "shinobi-plugin-music",
+  "version": "0.1.0",
+  "description": "Shinobi plugin — play, pause, skip and browse a local MPD music library by voice through any MCP client. Single file, zero runtime dependencies.",
+  "type": "module",
+  "main": "./shinobi-plugin-music.mjs",
+  "exports": {
+    ".": "./shinobi-plugin-music.mjs"
+  },
+  "files": [
+    "shinobi-plugin-music.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/music.test.mjs"
+  },
+  "keywords": [
+    "shinobi",
+    "shinobi-plugin",
+    "mcp",
+    "mpd",
+    "music"
+  ],
+  "author": "Tomislav Krizan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git",
+    "directory": "music"
+  },
+  "homepage": "https://github.com/numbererikson/shinobi-plugin-example/tree/main/music#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}
