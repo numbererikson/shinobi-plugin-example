@@ -166,13 +166,67 @@ function filterArgs(filters) {
   return filters.map(([tag, value]) => `${tag} ${quote(value)}`).join(' ');
 }
 
+/** Lowercase and strip diacritics, so "cavoglave" finds "Čavoglave" and "dorde" finds "Đorđe". */
+export function fold(text) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .trim();
+}
+
+/** Every file in the library, from `listall` (directories are implied by the paths). */
+async function listFiles(client) {
+  return pairs(await client.command('listall'))
+    .filter(([k]) => k.toLowerCase() === 'file')
+    .map(([, v]) => v);
+}
+
 /**
- * When tags miss (untagged MP3s), retry the free-text and genre terms against
- * the file path, so `Muzika/Rock/...` or `Thompson - Cavoglave.mp3` still match.
+ * Folder match: the library is organised as `Genre/Artist/song.mp3`, so a single
+ * spoken term ("rock", "led zeppelin", "eminem") is first looked up as a folder
+ * name. A folder whose name equals the term wins over one that merely contains
+ * it ("rap" picks `Rap/`, not `Trap/`). Every file below the matched folders is
+ * returned, subfolders included, so "rock" plays all of `Rock/` and "led
+ * zeppelin" only `Rock/Led Zeppelin/`.
  */
-function pathFallback(filters) {
-  if (!filters.some(([tag]) => tag === 'any' || tag === 'genre')) return null;
-  return filters.map(([tag, value]) => (tag === 'any' || tag === 'genre' ? ['file', value] : [tag, value]));
+export function matchFolders(files, term) {
+  const needle = fold(term);
+  if (!needle) return [];
+  const dirs = new Set();
+  for (const file of files) {
+    const parts = file.split('/').slice(0, -1);
+    for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+  }
+  const segment = (dir) => fold(dir.slice(dir.lastIndexOf('/') + 1));
+  let hits = [...dirs].filter((d) => segment(d) === needle);
+  if (hits.length === 0) hits = [...dirs].filter((d) => segment(d).includes(needle));
+  if (hits.length === 0) return [];
+  return files.filter((f) => hits.some((d) => f.startsWith(d + '/')));
+}
+
+/**
+ * Path match for untagged files: every requested word must appear somewhere in
+ * the file path, in any order, diacritics ignored, so artist "thompson" + title "cavoglave"
+ * finds `Domoljubne/Thompson/Bojna Čavoglave.mp3`.
+ */
+export function matchPaths(files, terms) {
+  const needles = terms.flatMap((t) => fold(t).split(/\s+/)).filter(Boolean);
+  if (needles.length === 0) return [];
+  return files.filter((f) => {
+    const path = fold(f);
+    return needles.every((n) => path.includes(n));
+  });
+}
+
+function shuffleInPlace(items) {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
 }
 
 async function readStatus(client) {
@@ -209,7 +263,7 @@ export default function register(registry) {
   registry.registerTool({
     name: 'plugin_music_play',
     description:
-      'Play music from the local library on the home speaker. Matches are case-insensitive substrings of tags (artist, title, album, genre) or, for untagged files, of the file path. `query` searches everything ("thompson cavoglave" style requests: put the artist in `artist` and the song in `title` when you can tell them apart). Replaces the queue with every match, shuffled by default, and starts playback. With no filters it resumes playback. Returns found count and the now-playing song.',
+      'Play music from the local library on the home speaker. The library is organised in folders like `Rock/Led Zeppelin/` or `Rap/Eminem/`: a single term ("rock", "led zeppelin", "eminem") passed as `query` plays everything in the folder of that name, subfolders included. Otherwise matches are case-insensitive, diacritic-insensitive substrings of tags (artist, title, album, genre) or of the file path; for a specific song put the artist in `artist` and the song in `title`. Replaces the queue with every match, shuffled once so nothing repeats until all have played, and starts playback. With no filters it resumes playback. Returns found count, what it matched on (folder, tags, file path) and the now-playing song.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -235,14 +289,23 @@ export default function register(registry) {
           return { found: null, resumed: true, ...(await readStatus(client)) };
         }
 
-        let songs = parseSongs(await client.command(`search ${filterArgs(filters)}`));
-        let matchedOn = 'tags';
+        // 1. One term ("rock", "eminem") → a folder of that name, whole subtree.
+        // 2. MPD tag search. 3. Every term somewhere in the file path (untagged files).
+        let songs = [];
+        let matchedOn = null;
+        let files = null;
+        const allFiles = async () => (files ??= await listFiles(client));
+        if (filters.length === 1 && filters[0][0] !== 'title') {
+          songs = matchFolders(await allFiles(), filters[0][1]).map((file) => ({ file }));
+          if (songs.length) matchedOn = 'folder';
+        }
         if (songs.length === 0) {
-          const fallback = pathFallback(filters);
-          if (fallback) {
-            songs = parseSongs(await client.command(`search ${filterArgs(fallback)}`));
-            matchedOn = 'file path';
-          }
+          songs = parseSongs(await client.command(`search ${filterArgs(filters)}`));
+          if (songs.length) matchedOn = 'tags';
+        }
+        if (songs.length === 0) {
+          songs = matchPaths(await allFiles(), filters.map(([, value]) => value)).map((file) => ({ file }));
+          if (songs.length) matchedOn = 'file path';
         }
         const bannedFiles = new Set(banned().map((b) => b.file));
         const matched = songs.length;
@@ -259,11 +322,15 @@ export default function register(registry) {
           };
         }
 
-        const queued = songs.slice(0, MAX_QUEUE);
-        const shuffle = args.shuffle !== false && queued.length > 1;
+        const wantShuffle = args.shuffle !== false;
+        // Sample before truncating, so a huge folder is not always its first MAX_QUEUE files.
+        const queued = (wantShuffle && songs.length > MAX_QUEUE ? shuffleInPlace([...songs]) : songs).slice(0, MAX_QUEUE);
+        const shuffle = wantShuffle && queued.length > 1;
+        // The queue is shuffled once and played in order: every song plays once
+        // before any repeats (random mode off), then the whole list starts over.
         const cmds = ['clear', ...queued.map((s) => `add ${quote(s.file)}`)];
         if (shuffle) cmds.push('shuffle');
-        cmds.push('play');
+        cmds.push('random 0', 'single 0', 'repeat 1', 'play');
         await client.command(['command_list_begin', ...cmds, 'command_list_end'].join('\n'));
 
         return {
