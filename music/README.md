@@ -91,12 +91,19 @@ Unmute the analog path. Control names differ per laptop; `amixer -c 0 scontrols`
 lists them, and a missing one just prints "Unable to find simple control":
 
 ```bash
-amixer -c 0 sset Master 80% unmute
+amixer -c 0 sset Master 100% unmute       # 80% is already -19 dB: keep the laptop at max
 amixer -c 0 sset Headphone 100% unmute
 amixer -c 0 sset 'Speaker+LO' 100% unmute
 amixer -c 0 sset PCM 100% unmute
 amixer -c 0 sset 'Auto-Mute Mode' Disabled
 speaker-test -D plughw:0,0 -t wav -c 2 -l 1   # says "Front Left", "Front Right"
+```
+
+Save the mixer so it survives a reboot, and control loudness on the receiver
+or by voice (`plugin_music_volume`) from now on:
+
+```bash
+sudo alsactl store
 ```
 
 If `speaker-test` finishes in about a second and nothing is heard, it played to
@@ -140,6 +147,15 @@ audio_output {
 EOF
 systemctl --user enable --now mpd
 systemctl --user status mpd --no-pager | head -5
+```
+
+If a song is found but the player drops straight to `pause`, check
+`journalctl --user -u mpd -n 15`. `Cannot get card index for 0` means the user
+service manager started before you joined the `audio` group (lingering keeps it
+alive across logins). Restart it once; this drops the SSH session:
+
+```bash
+sudo systemctl restart user@$(id -u)
 ```
 
 `auto_update` makes MPD pick up files dropped into `~/Muzika` on its own;
