@@ -9,6 +9,10 @@ subtasks grouped by status, decisions, dead ends, notes, and per-project
 context. Useful for handoff docs, status summaries, or pasting into
 Slack.
 
+> **Building a home server?** [HOME-SETUP.md](HOME-SETUP.md) walks through an old
+> laptop running Shinobi, the fitness and music plugins, Cloudflare access from
+> the Claude app, nightly backups and optional AdGuard Home, end to end.
+
 ## Plugins in this repo
 
 | Plugin | Path | What it shows |
