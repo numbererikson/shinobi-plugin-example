@@ -182,6 +182,18 @@ docker run -d --name shinobi --restart unless-stopped -p 127.0.0.1:8765:8765 \
 ```
 
 The container runs as root, so it can use the socket whatever its file mode.
+
+Check that it came up and loaded the plugin (the full log also prints the
+dashboard token, so filter it):
+
+```bash
+docker ps --format '{{.Names}} {{.Status}}'          # shinobi Up ...
+docker logs shinobi 2>&1 | grep -iE "plugin|music"
+```
+
+Then open a **new** chat in the Claude app (an existing chat keeps the tool
+list it started with) and say "play Led Zeppelin".
+
 To update the plugin later, repeat only the `curl` and `docker cp` lines and
 `docker restart shinobi`.
 
