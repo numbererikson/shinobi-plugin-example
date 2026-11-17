@@ -18,12 +18,22 @@ runtime dependencies** — it speaks the MPD text protocol over `node:net`.
 | `plugin_music_volume` | Absolute `level` (0-100) or relative `change` (±) |
 | `plugin_music_status` | State, current song, volume, queue length, position |
 | `plugin_music_library` | List `artists`, `albums` (optionally of one artist) or `genres` |
+| `plugin_music_dislike` | "This one annoys me": skip the current song, drop it from the queue and ban it from future plays |
+| `plugin_music_banned` | Show the banned list, or `restore` songs matching a substring |
+| `plugin_music_output` | List outputs, or choose where music plays (`target` substring; `only` or `add`) |
 | `plugin_music_rescan` | Rescan the music folder after adding files |
 
 Matching is a case-insensitive substring match, so "thompson" finds "Marko
 Perković Thompson". If tags give nothing, free-text and genre terms are retried
 against the file path, so an untagged `Rock/Some band - Song.mp3` still plays
 for "rock". A search with no match leaves the current queue untouched.
+
+**Nothing is ever deleted.** The plugin only speaks the MPD protocol, which has
+no way to remove files. "Dislike" puts the song on a banned list kept in
+Shinobi's per-plugin state (so it is backed up and synced with the rest of the
+brain); banned files are filtered out of every future `plugin_music_play` and
+can be restored with `plugin_music_banned`. The banned list needs a host with
+`registry.state` (Shinobi ≥ 0.3.2); playback works without it.
 
 ## Configuration
 
@@ -56,11 +66,26 @@ bind_to_address    "~/.mpd/socket"
 auto_update        "yes"
 audio_output {
     type "pipewire"
-    name "speaker"
+    name "Kucno kino"
+}
+audio_output {
+    type     "httpd"
+    name     "Mobitel stream"
+    encoder  "lame"
+    port     "8000"
+    bitrate  "192"
+    format   "44100:16:2"
+    always_on "yes"
+    tags     "yes"
 }
 EOF
 systemctl --user enable --now mpd
 ```
+
+The second output streams the same music as MP3 over HTTP on port 8000: open
+`http://<host-ip>:8000` once in a phone's browser or VLC on the home network,
+then switch with `plugin_music_output` ("play on the phone" / "play on the
+speaker"). The stream has no authentication — keep it on the home network.
 
 `auto_update` makes MPD pick up files dropped into `~/Muzika` on its own;
 `plugin_music_rescan` forces a scan.

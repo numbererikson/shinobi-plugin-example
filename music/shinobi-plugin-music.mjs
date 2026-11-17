@@ -192,8 +192,19 @@ async function readStatus(client) {
 
 const LIST_TAGS = { artists: 'artist', albums: 'album', genres: 'genre' };
 
+const BANNED_KEY = 'banned';
+
 export default function register(registry) {
   const config = () => mpdConfigFromEnv();
+
+  // The "don't play this again" list lives in Shinobi's per-plugin state, never
+  // on disk next to the music: banning only hides a file from future queues.
+  const store = registry.state;
+  const banned = () => (store ? store.get(BANNED_KEY) ?? [] : []);
+  const requireStore = () => {
+    if (!store) throw new Error('this Shinobi host has no plugin state store (needs Shinobi >= 0.3.2)');
+    return store;
+  };
 
   registry.registerTool({
     name: 'plugin_music_play',
@@ -233,11 +244,18 @@ export default function register(registry) {
             matchedOn = 'file path';
           }
         }
+        const bannedFiles = new Set(banned().map((b) => b.file));
+        const matched = songs.length;
+        songs = songs.filter((s) => !bannedFiles.has(s.file));
         if (songs.length === 0) {
           return {
             found: 0,
+            skippedBanned: matched,
             playing: false,
-            hint: 'Nothing matched. The current queue was left untouched. Call plugin_music_library to see which artists and genres exist, or plugin_music_rescan if files were just added.',
+            hint:
+              matched > 0
+                ? 'Every match is on the banned list. The current queue was left untouched. plugin_music_banned can list or restore them.'
+                : 'Nothing matched. The current queue was left untouched. Call plugin_music_library to see which artists and genres exist, or plugin_music_rescan if files were just added.',
           };
         }
 
@@ -248,7 +266,14 @@ export default function register(registry) {
         cmds.push('play');
         await client.command(['command_list_begin', ...cmds, 'command_list_end'].join('\n'));
 
-        return { found: songs.length, queued: queued.length, matchedOn, shuffled: shuffle, ...(await readStatus(client)) };
+        return {
+          found: songs.length,
+          skippedBanned: matched - songs.length,
+          queued: queued.length,
+          matchedOn,
+          shuffled: shuffle,
+          ...(await readStatus(client)),
+        };
       }),
   });
 
@@ -354,6 +379,97 @@ export default function register(registry) {
         }
         const unique = [...new Set(values.filter((v) => v.trim()))].sort((a, b) => a.localeCompare(b));
         return { [args.list]: unique.slice(0, limit), total: unique.length, truncated: unique.length > limit };
+      }),
+  });
+
+  registry.registerTool({
+    name: 'plugin_music_dislike',
+    description:
+      'The user does not want to hear the current song ("this one annoys me", "remove it"). Skips it, removes it from the current queue and puts it on the banned list so plugin_music_play never queues it again. The file itself is NEVER deleted; plugin_music_banned can restore it.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: () =>
+      withMpd(config(), async (client) => {
+        const s = requireStore();
+        const { songid } = toObject(await client.command('status'));
+        const song = songSummary(parseSongs(await client.command('currentsong'))[0]);
+        if (!song || songid === undefined) return { banned: null, hint: 'Nothing is playing.' };
+
+        s.update(BANNED_KEY, (cur) => {
+          const list = cur ?? [];
+          if (list.some((b) => b.file === song.file)) return list;
+          return [...list, { ...song, bannedAt: new Date().toISOString() }];
+        });
+        await client.command('next');
+        await client.command(`deleteid ${songid}`);
+        return { banned: song, deletedFile: false, ...(await readStatus(client)) };
+      }),
+  });
+
+  registry.registerTool({
+    name: 'plugin_music_banned',
+    description:
+      'Show the banned ("don\'t play again") list, or restore songs to it. `restore` is a case-insensitive substring matched against file, artist and title; every match is taken off the list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        restore: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    handler: (args) => {
+      if (typeof args.restore === 'string' && args.restore.trim()) {
+        const needle = args.restore.trim().toLowerCase();
+        const hit = (b) => [b.file, b.artist, b.title].some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
+        let restored = [];
+        const list = requireStore().update(BANNED_KEY, (cur) => {
+          const all = cur ?? [];
+          restored = all.filter(hit);
+          return all.filter((b) => !hit(b));
+        });
+        return { restored, banned: list };
+      }
+      return { banned: banned() };
+    },
+  });
+
+  registry.registerTool({
+    name: 'plugin_music_output',
+    description:
+      'List the player outputs (e.g. the home speaker and a phone/browser stream) or choose where music plays. `target` is a case-insensitive substring of an output name. mode "only" (default) enables that output and disables the rest; "add" enables it alongside the others.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string' },
+        mode: { type: 'string', enum: ['only', 'add'], default: 'only' },
+      },
+      additionalProperties: false,
+    },
+    handler: (args) =>
+      withMpd(config(), async (client) => {
+        const readOutputs = async () => {
+          const outs = [];
+          for (const [k, v] of pairs(await client.command('outputs'))) {
+            if (k === 'outputid') outs.push({ id: Number(v) });
+            else if (outs.length && k === 'outputname') outs[outs.length - 1].name = v;
+            else if (outs.length && k === 'outputenabled') outs[outs.length - 1].enabled = v === '1';
+          }
+          return outs;
+        };
+        const outputs = await readOutputs();
+        if (typeof args.target !== 'string' || !args.target.trim()) return { outputs };
+
+        const needle = args.target.trim().toLowerCase();
+        const chosen = outputs.filter((o) => (o.name ?? '').toLowerCase().includes(needle));
+        if (chosen.length === 0) {
+          throw new Error(`no output matches "${args.target}". Available: ${outputs.map((o) => o.name).join(', ')}`);
+        }
+        const chosenIds = new Set(chosen.map((o) => o.id));
+        const cmds = chosen.map((o) => `enableoutput ${o.id}`);
+        if (args.mode !== 'add') {
+          for (const o of outputs) if (!chosenIds.has(o.id)) cmds.push(`disableoutput ${o.id}`);
+        }
+        await client.command(['command_list_begin', ...cmds, 'command_list_end'].join('\n'));
+        return { outputs: await readOutputs() };
       }),
   });
 
