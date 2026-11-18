@@ -1,0 +1,35 @@
+{
+  "name": "shinobi-plugin-adguard",
+  "version": "0.1.0",
+  "description": "Shinobi plugin — run AdGuard Home by voice: per-device service blocks with timed undo, schedules, device groups, activity and site rules. Single file, zero runtime dependencies.",
+  "type": "module",
+  "main": "./shinobi-plugin-adguard.mjs",
+  "exports": {
+    ".": "./shinobi-plugin-adguard.mjs"
+  },
+  "files": [
+    "shinobi-plugin-adguard.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/adguard.test.mjs"
+  },
+  "keywords": [
+    "shinobi",
+    "shinobi-plugin",
+    "mcp",
+    "adguard",
+    "parental-control"
+  ],
+  "author": "Tomislav Krizan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git",
+    "directory": "adguard"
+  },
+  "homepage": "https://github.com/numbererikson/shinobi-plugin-example/tree/main/adguard#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}
