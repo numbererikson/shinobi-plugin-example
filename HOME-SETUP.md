@@ -350,6 +350,17 @@ its own rules, e.g. **Blocked services → YouTube** for a TV or a kid's box.
 > Don't turn on AdGuard's own DHCP server next to the router's: two DHCP
 > servers on one network leave Wi-Fi devices without internet.
 
+### Run AdGuard by voice
+
+The [AdGuard plugin](adguard/README.md) lets the Claude app manage this:
+- "let the kids watch YouTube until 19:00": blocked again at 19:00 by itself;
+- "YouTube only 17–19 on weekdays";
+- "what was the kids' PC doing today?";
+- "pause ad blocking for 10 minutes".
+
+Its README moves all Shinobi settings into one `~/shinobi.env` file, so
+recreating the container stays a one-liner.
+
 ---
 
 ## Maintenance
