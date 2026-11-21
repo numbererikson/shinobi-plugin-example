@@ -112,7 +112,14 @@ once; a cookie keeps you logged in).
 claude.ai → **Settings → Connectors → Add custom connector**:
 
 - Name: `Shinobi`
-- URL: `https://shinobi.example.com/mcp?token=YOUR_TOKEN`
+- URL: `https://shinobi.example.com/mcp` (only the URL: no token, no headers)
+
+Press **Connect**. A Shinobi page asks "Allow Claude?". Enter your dashboard
+token once, or just press **Allow** if this browser is already signed in to
+the dashboard. Claude gets its own revocable access, listed in the dashboard
+under **Settings → Connected apps**. This needs Shinobi 0.5.0 or newer. On
+older versions, put the token in the URL instead:
+`https://shinobi.example.com/mcp?token=YOUR_TOKEN`.
 
 The connector syncs to the phone app. Tools appear in **new** chats. A chat
 that was already open keeps the tool list it started with.
