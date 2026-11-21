@@ -21,6 +21,7 @@ Slack.
 | `shinobi-plugin-fitness` | [`fitness/`](fitness/) | Stateful reference plugin — 7 tools over the writable `registry.state` store, in TypeScript with a build + tests. |
 | `shinobi-plugin-music` | [`music/`](music/) | Single-file, zero-dependency plugin — 9 tools that drive a local MPD player (play by artist/song/genre, skip, volume, library, ban list, speaker or phone stream). |
 | `shinobi-plugin-adguard` | [`adguard/`](adguard/) | Single-file, zero-dependency plugin — 9 tools over AdGuard Home's REST API (per-device service blocks with timed undo, weekly windows, device groups, activity, site rules, pause). |
+| `shinobi-plugin-remember` | [`remember/`](remember/) | Single-file, zero-dependency plugin — 10 tools for encrypted personal memory and reminders, using `registry.schedule` (fires every minute) and `registry.notify` (push with Done/Snooze buttons). Needs Shinobi 0.7.0+. |
 
 Each is its own publishable npm package. For a brand-new plugin the usual
 pattern is its own repo; the plugins here live together only because this repo is

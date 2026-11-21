@@ -1,0 +1,38 @@
+{
+  "name": "shinobi-plugin-remember",
+  "version": "0.1.0",
+  "description": "Shinobi plugin — personal memory and reminders from any Claude chat. Encrypted facts, push reminders with Done/Snooze. Single file, zero runtime dependencies.",
+  "type": "module",
+  "main": "./shinobi-plugin-remember.mjs",
+  "exports": {
+    ".": "./shinobi-plugin-remember.mjs"
+  },
+  "files": [
+    "shinobi-plugin-remember.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/remember.test.mjs"
+  },
+  "keywords": [
+    "shinobi",
+    "shinobi-plugin",
+    "mcp",
+    "reminders",
+    "memory"
+  ],
+  "author": "Tomislav Krizan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git",
+    "directory": "remember"
+  },
+  "homepage": "https://github.com/numbererikson/shinobi-plugin-example/tree/main/remember#readme",
+  "peerDependencies": {
+    "@shinobiapps/shinobi": ">=0.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
