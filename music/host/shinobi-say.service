@@ -1,0 +1,6 @@
+[Unit]
+Description=Shinobi announcements: turn queued text into speech
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/shinobi-say

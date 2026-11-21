@@ -15,6 +15,8 @@
 //   SHINOBI_MPD_PASSWORD  sent with MPD's `password` command when set
 
 import net from 'node:net';
+import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const TIMEOUT_MS = 5000;
 const MAX_QUEUE = 2000;
@@ -35,6 +37,23 @@ export function mpdConfigFromEnv(env = process.env) {
     port: Number(env.SHINOBI_MPD_PORT || 6600),
     password,
   };
+}
+
+/**
+ * Announcements ("say this on the speaker"). The plugin drops the text into a
+ * folder shared with the host; a tiny host helper turns it into a WAV with
+ * espeak-ng inside the music folder and answers with `<id>.done`. MPD then
+ * plays it between songs. Defaults follow the MPD socket mount (/mpd/say).
+ */
+export function sayConfigFromEnv(env = process.env) {
+  const dir = env.SHINOBI_SAY_DIR || (env.SHINOBI_MPD_SOCKET ? join(dirname(env.SHINOBI_MPD_SOCKET), 'say') : null);
+  const folder = (env.SHINOBI_SAY_FOLDER || '_shinobi_say').replace(/^\/+|\/+$/g, '');
+  const presets = (env.SHINOBI_SAY_PRESETS || '')
+    .split('|')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  return { dir, folder, presets, ttsTimeoutMs: Number(env.SHINOBI_SAY_TIMEOUT_MS) || 15_000 };
 }
 
 /** Quote an argument for the MPD protocol. */
@@ -318,6 +337,9 @@ export default function register(registry) {
           if (songs.length) matchedOn = 'file path';
         }
         const bannedFiles = new Set(banned().map((b) => b.file));
+        // Announcement clips live in the music folder but are never music.
+        const sayFolder = sayConfigFromEnv().folder + '/';
+        songs = songs.filter((s) => !s.file.startsWith(sayFolder));
         const matched = songs.length;
         songs = songs.filter((s) => !bannedFiles.has(s.file));
         if (songs.length === 0) {
@@ -553,6 +575,22 @@ export default function register(registry) {
       }),
   });
 
+  registry.registerTool({
+    name: 'plugin_music_say',
+    description:
+      'Say a short message out loud on the home speaker ("tell my wife in the basement that lunch is ready" → text "Ručak je gotov"). Speaks Croatian by default. If music is playing it is interrupted for the message and then continues where it was. Put only the words to be spoken in `text`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The words to speak, max 500 characters' },
+        wait: { type: 'boolean', description: 'Wait until the message has finished playing (default false)' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    handler: (args) => speak(config(), sayConfigFromEnv(), args.text, { wait: args.wait === true }),
+  });
+
   // Dashboard page (Shinobi >= 0.4.0): sidebar → Apps → Music.
   if (typeof registry.registerPage === 'function') {
     registry.registerPage({
@@ -570,6 +608,7 @@ const fileTitle = (file) => file.slice(file.lastIndexOf('/') + 1).replace(/\.[a-
 
 /** Blocks for the dashboard page; buttons call this plugin's own tools. */
 export async function renderMusicPage(config, bannedList) {
+  const say = sayConfigFromEnv();
   const { status, outputs, files } = await withMpd(config, async (client) => ({
     status: await readStatus(client),
     outputs: await listOutputs(client),
@@ -610,8 +649,16 @@ export async function renderMusicPage(config, bannedList) {
   const folders = new Map();
   for (const f of files) {
     const i = f.indexOf('/');
-    if (i > 0) folders.set(f.slice(0, i), (folders.get(f.slice(0, i)) ?? 0) + 1);
+    if (i > 0 && f.slice(0, i) !== say.folder) folders.set(f.slice(0, i), (folders.get(f.slice(0, i)) ?? 0) + 1);
   }
+  if (say.dir) {
+    blocks.push({ type: 'heading', text: 'Announce' });
+    blocks.push({ type: 'input', placeholder: 'Type a message to say on the speaker', button: '🔊 Say', tool: 'plugin_music_say', arg: 'text', maxLength: 500 });
+    if (say.presets.length) {
+      blocks.push({ type: 'actions', buttons: say.presets.map((p) => ({ label: `🔊 ${p}`, tool: 'plugin_music_say', args: { text: p } })) });
+    }
+  }
+
   blocks.push({ type: 'heading', text: 'Play a folder' });
   if (folders.size) {
     blocks.push({
@@ -647,3 +694,117 @@ export async function renderMusicPage(config, bannedList) {
 
   return { blocks, refreshSeconds: 5 };
 }
+
+// ---- announcements ------------------------------------------------------------
+
+const SAY_POLL_MS = 200;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(check, timeoutMs, message) {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const v = await check();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(message);
+    await sleep(SAY_POLL_MS);
+  }
+}
+
+/**
+ * Speak `text` on the speaker: hand it to the host helper, wait for the WAV,
+ * slot it in after the current song, play it, then put the interrupted song
+ * back at the second it was at. Returns once the message starts playing
+ * unless `wait` is set.
+ */
+export async function speak(mpd, say, rawText, { wait = false } = {}) {
+  const text = String(rawText ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) throw new Error('nothing to say');
+  if (text.length > 500) throw new Error('message too long (max 500 characters)');
+  if (!say.dir) throw new Error('announcements need SHINOBI_MPD_SOCKET (or SHINOBI_SAY_DIR) so the host helper can be reached');
+  if (!existsSync(say.dir)) {
+    throw new Error(`announcement folder ${say.dir} is missing: set up the host helper (music README → Announcements)`);
+  }
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const txt = join(say.dir, `${id}.txt`);
+  const done = join(say.dir, `${id}.done`);
+  writeFileSync(join(say.dir, `${id}.tmp`), text + '\n', 'utf8');
+  renameSync(join(say.dir, `${id}.tmp`), txt); // the helper only ever sees complete files
+  try {
+    await waitFor(() => existsSync(done), say.ttsTimeoutMs, 'the speech helper did not answer: is shinobi-say.path running on the host? (music README → Announcements)');
+  } finally {
+    for (const f of [txt, done]) {
+      try {
+        unlinkSync(f);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  const uri = `${say.folder}/${id}.wav`;
+  const started = await withMpd(mpd, async (client) => {
+    await client.command(`update ${quote(say.folder)}`);
+    const clip = await waitFor(
+      async () => {
+        try {
+          return parseSongs(await client.command(`lsinfo ${quote(uri)}`))[0] ?? null;
+        } catch {
+          return null;
+        }
+      },
+      8000,
+      'MPD did not pick up the message file: is the music folder shared with the speech helper?',
+    );
+    const before = toObject(await client.command('status'));
+    const playing = before.state === 'play' || before.state === 'pause';
+    const pos = playing && before.song !== undefined ? Number(before.song) + 1 : Number(before.playlistlength ?? 0);
+    const added = toObject(await client.command(`addid ${quote(uri)} ${pos}`));
+    const msgId = added.id;
+    await client.command(`playid ${msgId}`);
+    const seconds = Number(clip.duration ?? clip.time ?? 10);
+    return { before, msgId, seconds };
+  });
+
+  const restore = async () => {
+    const { before, msgId, seconds } = started;
+    // Wait until MPD has moved past the message (or the user did something else).
+    await waitFor(
+      () => withMpd(mpd, async (client) => {
+        const st = toObject(await client.command('status'));
+        return st.songid !== msgId || st.state !== 'play';
+      }),
+      (seconds + 15) * 1000,
+      'message did not finish',
+    ).catch(() => null);
+    await withMpd(mpd, async (client) => {
+      if ((before.state === 'play' || before.state === 'pause') && before.songid !== undefined) {
+        try {
+          await client.command(`playid ${before.songid}`);
+          if (before.elapsed !== undefined) await client.command(`seekid ${before.songid} ${Number(before.elapsed).toFixed(1)}`);
+          if (before.state === 'pause') await client.command('pause 1');
+        } catch {
+          /* the old song was removed meanwhile: just keep playing */
+        }
+      } else {
+        await client.command('stop');
+      }
+      try {
+        await client.command(`deleteid ${msgId}`);
+      } catch {
+        /* already removed */
+      }
+    });
+  };
+
+  const result = { spoken: text, interruptedMusic: started.before.state === 'play', seconds: Math.round(started.seconds) };
+  if (wait) {
+    await restore();
+    return { ...result, finished: true };
+  }
+  restore().catch(() => {
+    /* best effort: the message itself already played */
+  });
+  return { ...result, finished: false };
+}
+

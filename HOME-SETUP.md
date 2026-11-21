@@ -311,6 +311,12 @@ card index`, run the `sudo systemctl restart user@$(id -u)` line again.
 
 Then, in a **new** chat in the Claude app: "play Led Zeppelin".
 
+### Announcements on the speaker (optional)
+
+To have Claude say things out loud ("tell my wife lunch is ready"), install
+espeak-ng and the small host helper. The steps are in
+[music/README.md → Announcements](music/README.md#announcements-plugin_music_say).
+
 ### Everyday phrases
 
 | Say | Does |
@@ -322,6 +328,7 @@ Then, in a **new** chat in the Claude app: "play Led Zeppelin".
 | "play on the phone" | on the home Wi-Fi, first open `http://192.168.1.100:8000` on the phone |
 | "play on the speaker" | back to the home theater |
 | "rescan the music" | after adding many files at once |
+| "tell my wife lunch is ready" | says it on the speaker (needs the announcements helper) |
 | "what do I train today?", "log my workout" | fitness plugin |
 
 ---

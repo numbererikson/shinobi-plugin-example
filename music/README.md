@@ -22,6 +22,7 @@ runtime dependencies** — it speaks the MPD text protocol over `node:net`.
 | `plugin_music_banned` | Show the banned list, or `restore` songs matching a substring |
 | `plugin_music_output` | List outputs, or choose where music plays (`target` substring; `only` or `add`) |
 | `plugin_music_rescan` | Rescan the music folder after adding files |
+| `plugin_music_say` | Say a message out loud on the speaker ("tell my wife lunch is ready"); music pauses for it and resumes at the same second |
 
 ### Folders decide what "play rock" means
 
@@ -72,6 +73,50 @@ On Shinobi 0.4.0 or newer the plugin adds **Apps → Music** to the dashboard si
 - the banned list.
 
 It refreshes every 5 seconds. Older hosts simply don't show it.
+
+## Announcements (`plugin_music_say`)
+
+"Tell my wife in the basement that lunch is ready" → Claude calls
+`plugin_music_say` with `text: "Ručak je gotov"` and the home speaker says it.
+If music is playing, the plugin puts the message right after the current
+song, plays it, and then returns to the interrupted song at the same second.
+The dashboard page has a text box and optional one-tap preset buttons.
+
+Speech is made on the host by [espeak-ng](https://github.com/espeak-ng/espeak-ng)
+(Croatian by default; robotic but clear). The container cannot run it, so a
+tiny host helper does:
+
+1. the plugin writes `<id>.txt` into `~/.mpd/say` (mounted in the container as `/mpd/say`);
+2. a systemd path unit starts `shinobi-say`, which writes `~/Muzika/_shinobi_say/<id>.wav` and answers with `<id>.done`;
+3. the plugin has MPD play the clip. Clips are never queued as music and
+   never shown as a folder, and the helper deletes them after an hour.
+
+Host setup (once):
+
+```bash
+sudo apt install -y espeak-ng
+mkdir -p ~/.mpd/say ~/Muzika/_shinobi_say ~/.local/bin ~/.config/systemd/user
+base=https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/music/host
+curl -fsSL -o ~/.local/bin/shinobi-say "$base/shinobi-say" && chmod +x ~/.local/bin/shinobi-say
+curl -fsSL -o ~/.config/systemd/user/shinobi-say.service "$base/shinobi-say.service"
+curl -fsSL -o ~/.config/systemd/user/shinobi-say.path "$base/shinobi-say.path"
+systemctl --user daemon-reload
+systemctl --user enable --now shinobi-say.path
+```
+
+Optional, in `~/shinobi.env` (then recreate the container):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SHINOBI_SAY_PRESETS` | — | One-tap buttons on the dashboard page, `|`-separated, e.g. `Ručak je gotov|Dođi gore` |
+| `SHINOBI_SAY_DIR` | `<socket dir>/say` | Request folder as seen from the container |
+| `SHINOBI_SAY_FOLDER` | `_shinobi_say` | Clip folder inside the music library |
+| `SHINOBI_SAY_TIMEOUT_MS` | `15000` | How long to wait for the host helper |
+
+Voice and speed are set on the host, in the helper's environment
+(`SHINOBI_SAY_VOICE`, default `hr`; `SHINOBI_SAY_SPEED`, default `140`). To
+change them, run `systemctl --user edit shinobi-say.service` and add e.g.
+`Environment=SHINOBI_SAY_SPEED=120`.
 
 ## Configuration
 

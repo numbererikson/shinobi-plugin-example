@@ -1,0 +1,25 @@
+#!/bin/sh
+# shinobi-say: host helper for plugin_music_say.
+#
+# The plugin (inside the Shinobi container) drops <id>.txt into ~/.mpd/say.
+# This script turns each one into <id>.wav with espeak-ng inside the music
+# folder, where MPD can play it, and answers with <id>.done. It is started by
+# the shinobi-say.path unit whenever a request appears.
+set -eu
+
+SAY_DIR="${SHINOBI_SAY_DIR:-$HOME/.mpd/say}"
+OUT_DIR="${SHINOBI_SAY_OUT:-$HOME/Muzika/_shinobi_say}"
+VOICE="${SHINOBI_SAY_VOICE:-hr}"
+SPEED="${SHINOBI_SAY_SPEED:-140}"
+
+mkdir -p "$OUT_DIR"
+# Old clips are only needed while they play.
+find "$OUT_DIR" -name '*.wav' -mmin +60 -delete 2>/dev/null || true
+
+for txt in "$SAY_DIR"/*.txt; do
+  [ -e "$txt" ] || continue
+  id=$(basename "$txt" .txt)
+  espeak-ng -v "$VOICE" -s "$SPEED" -w "$OUT_DIR/$id.wav" -f "$txt" || echo "shinobi-say: espeak-ng failed for $id" >&2
+  rm -f "$txt"
+  : > "$SAY_DIR/$id.done"
+done
