@@ -228,19 +228,23 @@ function memoryStore() {
   };
 }
 
-function loadTools({ state = memoryStore() } = {}) {
+function loadTools({ state = memoryStore(), pages: withPages = true } = {}) {
   const tools = new Map();
-  register({
+  const pages = new Map();
+  const registry = {
     registerTool(def) {
       assert.match(def.name, /^plugin_[a-z][a-z0-9_]*$/);
       assert.ok(!tools.has(def.name), `duplicate ${def.name}`);
       tools.set(def.name, def);
     },
     state,
-  });
+  };
+  if (withPages) registry.registerPage = (def) => pages.set(def.id, def);
+  register(registry);
   return {
     names: [...tools.keys()],
     state,
+    pages,
     call: (name, args = {}) => tools.get(name).handler(args),
   };
 }
@@ -514,4 +518,29 @@ test('matchFolders prefers an exact folder name and returns nothing for a file-n
   assert.deepEqual(matchFolders(files, 'rock'), ['Rock/A/x.mp3', 'Rock/B/y.mp3']);
   assert.deepEqual(matchFolders(files, 'punk'), ['Punk Rock/z.mp3']);
   assert.deepEqual(matchFolders(files, 'bottom'), []);
+});
+
+test('dashboard page shows the player and only uses the plugin\'s own tools', async () => {
+  const { call, pages, names } = loadTools();
+  assert.deepEqual([...pages.keys()], ['music']);
+  await call('plugin_music_play', { artist: 'Led Zeppelin' });
+  await call('plugin_music_dislike');
+  await call('plugin_music_play', { query: 'rap', shuffle: false });
+  const { blocks, refreshSeconds } = await pages.get('music').render();
+  assert.equal(refreshSeconds, 5);
+  const stats = blocks.find((b) => b.type === 'stats');
+  assert.equal(stats.items.find((i) => i.label === 'State').value, 'Playing');
+  assert.equal(stats.items.find((i) => i.label === 'Plays on').value, 'Kucno kino');
+  const buttons = blocks.filter((b) => b.type === 'actions').flatMap((b) => b.buttons);
+  assert.ok(buttons.every((b) => names.includes(b.tool)), 'every button targets a music tool');
+  assert.ok(buttons.some((b) => b.tool === 'plugin_music_play' && b.args.query === 'Rap' && b.label === 'Rap (3)'));
+  assert.ok(buttons.some((b) => b.tool === 'plugin_music_output' && b.args.target === 'Mobitel stream'));
+  const bannedList = blocks.find((b) => b.type === 'list');
+  assert.equal(bannedList.items[0].title, 'Kashmir');
+});
+
+test('hosts without registerPage still load every tool', () => {
+  const { names, pages } = loadTools({ pages: false });
+  assert.equal(names.length, 9);
+  assert.equal(pages.size, 0);
 });

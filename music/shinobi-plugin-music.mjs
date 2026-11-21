@@ -244,6 +244,16 @@ async function readStatus(client) {
   };
 }
 
+async function listOutputs(client) {
+  const outs = [];
+  for (const [k, v] of pairs(await client.command('outputs'))) {
+    if (k === 'outputid') outs.push({ id: Number(v) });
+    else if (outs.length && k === 'outputname') outs[outs.length - 1].name = v;
+    else if (outs.length && k === 'outputenabled') outs[outs.length - 1].enabled = v === '1';
+  }
+  return outs;
+}
+
 const LIST_TAGS = { artists: 'artist', albums: 'album', genres: 'genre' };
 
 const BANNED_KEY = 'banned';
@@ -513,15 +523,7 @@ export default function register(registry) {
     },
     handler: (args) =>
       withMpd(config(), async (client) => {
-        const readOutputs = async () => {
-          const outs = [];
-          for (const [k, v] of pairs(await client.command('outputs'))) {
-            if (k === 'outputid') outs.push({ id: Number(v) });
-            else if (outs.length && k === 'outputname') outs[outs.length - 1].name = v;
-            else if (outs.length && k === 'outputenabled') outs[outs.length - 1].enabled = v === '1';
-          }
-          return outs;
-        };
+        const readOutputs = () => listOutputs(client);
         const outputs = await readOutputs();
         if (typeof args.target !== 'string' || !args.target.trim()) return { outputs };
 
@@ -550,4 +552,98 @@ export default function register(registry) {
         return { rescanning: true, job: res.updating_db !== undefined ? Number(res.updating_db) : null };
       }),
   });
+
+  // Dashboard page (Shinobi >= 0.4.0): sidebar → Apps → Music.
+  if (typeof registry.registerPage === 'function') {
+    registry.registerPage({
+      id: 'music',
+      title: 'Music',
+      icon: 'music',
+      order: 10,
+      render: () => renderMusicPage(config(), banned()),
+    });
+  }
+}
+
+const fmtTime = (secs) => `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+const fileTitle = (file) => file.slice(file.lastIndexOf('/') + 1).replace(/\.[a-z0-9]{2,4}$/i, '');
+
+/** Blocks for the dashboard page; buttons call this plugin's own tools. */
+export async function renderMusicPage(config, bannedList) {
+  const { status, outputs, files } = await withMpd(config, async (client) => ({
+    status: await readStatus(client),
+    outputs: await listOutputs(client),
+    files: await listFiles(client),
+  }));
+
+  const song = status.current;
+  const stateLabel = { play: 'Playing', pause: 'Paused', stop: 'Stopped' }[status.state] ?? status.state;
+  const enabled = outputs.filter((o) => o.enabled).map((o) => o.name);
+  const blocks = [
+    {
+      type: 'stats',
+      items: [
+        { label: 'Now playing', value: song ? song.title ?? fileTitle(song.file) : '—', hint: song?.artist ?? (song ? song.file.split('/').slice(0, -1).join(' / ') : undefined) },
+        { label: 'State', value: stateLabel, tone: status.state === 'play' ? 'ok' : 'muted' },
+        { label: 'Volume', value: status.volume === null || status.volume < 0 ? '—' : `${status.volume}%` },
+        { label: 'Queue', value: `${status.queueLength} songs` },
+        { label: 'Plays on', value: enabled.join(', ') || 'nothing', tone: enabled.length ? 'default' : 'warn' },
+      ],
+    },
+  ];
+  if (status.durationSeconds) {
+    blocks.push({ type: 'progress', label: 'Position', value: status.elapsedSeconds ?? 0, max: status.durationSeconds, hint: `${fmtTime(status.elapsedSeconds ?? 0)} / ${fmtTime(status.durationSeconds)}` });
+  }
+  blocks.push({
+    type: 'actions',
+    buttons: [
+      { label: '⏮ Previous', tool: 'plugin_music_control', args: { action: 'previous' } },
+      { label: status.state === 'play' ? '⏸ Pause' : '▶ Play', tool: 'plugin_music_control', args: { action: 'toggle' }, variant: 'primary' },
+      { label: '⏭ Next', tool: 'plugin_music_control', args: { action: 'next' } },
+      { label: '− Quieter', tool: 'plugin_music_volume', args: { change: -10 } },
+      { label: '+ Louder', tool: 'plugin_music_volume', args: { change: 10 } },
+      { label: '👎 Skip & never again', tool: 'plugin_music_dislike', variant: 'danger', confirm: 'Skip this song and keep it out of future queues? The file stays on disk.' },
+    ],
+  });
+
+  // One button per top-level folder (the genre folders): Rock, Rap, …
+  const folders = new Map();
+  for (const f of files) {
+    const i = f.indexOf('/');
+    if (i > 0) folders.set(f.slice(0, i), (folders.get(f.slice(0, i)) ?? 0) + 1);
+  }
+  blocks.push({ type: 'heading', text: 'Play a folder' });
+  if (folders.size) {
+    blocks.push({
+      type: 'actions',
+      buttons: [...folders.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(0, 12)
+        .map(([name, count]) => ({ label: `${name} (${count})`, tool: 'plugin_music_play', args: { query: name } })),
+    });
+  } else {
+    blocks.push({ type: 'text', text: 'No folders in the music library yet.', tone: 'muted' });
+  }
+
+  if (outputs.length > 1) {
+    blocks.push({ type: 'heading', text: 'Where it plays' });
+    blocks.push({
+      type: 'actions',
+      buttons: outputs.map((o) => ({
+        label: `${o.enabled && enabled.length === 1 ? '● ' : ''}${o.name}`,
+        tool: 'plugin_music_output',
+        args: { target: o.name, mode: 'only' },
+        variant: o.enabled && enabled.length === 1 ? 'primary' : 'default',
+      })),
+    });
+  }
+
+  blocks.push({ type: 'heading', text: `Banned songs (${bannedList.length})` });
+  blocks.push({
+    type: 'list',
+    items: bannedList.slice(-30).reverse().map((b) => ({ title: b.title ?? fileTitle(b.file), subtitle: b.artist ? `${b.artist} — ${b.file}` : b.file })),
+    empty: 'Nothing banned.',
+  });
+
+  return { blocks, refreshSeconds: 5 };
 }
