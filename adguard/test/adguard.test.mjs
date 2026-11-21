@@ -125,17 +125,20 @@ function memoryStore() {
   };
 }
 
-function loadTools({ state = memoryStore() } = {}) {
+function loadTools({ state = memoryStore(), pages: withPages = true } = {}) {
   const tools = new Map();
-  register({
+  const pages = new Map();
+  const registry = {
     registerTool(def) {
       assert.match(def.name, /^plugin_[a-z][a-z0-9_]*$/);
       assert.ok(!tools.has(def.name), `duplicate ${def.name}`);
       tools.set(def.name, def);
     },
     state,
-  });
-  return { names: [...tools.keys()], state, call: (n, args = {}) => tools.get(n).handler(args) };
+  };
+  if (withPages) registry.registerPage = (def) => pages.set(def.id, def);
+  register(registry);
+  return { names: [...tools.keys()], state, pages, call: (n, args = {}) => tools.get(n).handler(args) };
 }
 
 const client = (name) => ag.clients.find((c) => c.name === name);
@@ -353,4 +356,31 @@ test('helpers: fold, normalizeDomain, describeSchedule, config', () => {
   assert.throws(() => normalizeDomain('not a domain'), /not a domain/);
   assert.deepEqual(describeSchedule({ time_zone: 'UTC', mon: { start: 0, end: 3_600_000 } }), ['mon 00:00-01:00']);
   assert.equal(adguardConfigFromEnv({ SHINOBI_ADGUARD_URL: 'http://x/ ' }).url, 'http://x');
+});
+
+test('dashboard page shows groups, one-tap buttons on own tools, temporary changes and silent devices', async () => {
+  const { call, pages, names } = loadTools();
+  await call('plugin_adguard_group', { group: 'djeca', add: ['TV dnevna', 'Android box'] });
+  await call('plugin_adguard_services', { action: 'allow', target: 'Android box', services: ['youtube'], until: '19:00' });
+  const { blocks, refreshSeconds } = await pages.get('adguard').render();
+  assert.equal(refreshSeconds, 30);
+  const stats = blocks.find((b) => b.type === 'stats');
+  assert.equal(stats.items.find((i) => i.label === 'Protection').value, 'On');
+  const buttons = blocks.filter((b) => b.type === 'actions').flatMap((b) => b.buttons);
+  assert.ok(buttons.every((b) => names.includes(b.tool)), 'every button targets an adguard tool');
+  const allow = buttons.find((b) => b.label === 'Allow youtube 1 h');
+  assert.deepEqual(allow.args, { action: 'allow', target: 'djeca', services: ['youtube'], minutes: 60 });
+  assert.ok(blocks.some((b) => b.type === 'heading' && b.text === 'Group: djeca'));
+  const temp = blocks.filter((b) => b.type === 'list')[1];
+  assert.equal(temp.items.length, 1);
+  assert.match(temp.items[0].subtitle, /^blocked again at 19:00$/);
+  const table = blocks.find((b) => b.type === 'table');
+  assert.equal(table.rows.length, 2);
+  assert.equal(table.rows.find((r) => r[0] === 'Android box')[4], 'never ⚠');
+});
+
+test('hosts without registerPage still load every tool', () => {
+  const { names, pages } = loadTools({ pages: false });
+  assert.equal(names.length, 9);
+  assert.equal(pages.size, 0);
 });

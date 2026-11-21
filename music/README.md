@@ -62,6 +62,17 @@ brain); banned files are filtered out of every future `plugin_music_play` and
 can be restored with `plugin_music_banned`. The banned list needs a host with
 `registry.state` (Shinobi ≥ 0.3.2); playback works without it.
 
+## Dashboard page
+
+On Shinobi 0.4.0 or newer the plugin adds **Apps → Music** to the dashboard sidebar. The page shows:
+- what is playing, with its position, the volume, the queue and where the music goes;
+- buttons for previous, play/pause, next, quieter/louder and "skip & never again";
+- one button per genre folder ("Rock (124)");
+- the output switch (speaker or phone stream);
+- the banned list.
+
+It refreshes every 5 seconds. Older hosts simply don't show it.
+
 ## Configuration
 
 Read from the Shinobi host's environment on every call:

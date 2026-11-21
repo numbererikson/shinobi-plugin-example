@@ -1,6 +1,6 @@
 {
   "name": "shinobi-plugin-adguard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shinobi plugin — run AdGuard Home by voice: per-device service blocks with timed undo, schedules, device groups, activity and site rules. Single file, zero runtime dependencies.",
   "type": "module",
   "main": "./shinobi-plugin-adguard.mjs",

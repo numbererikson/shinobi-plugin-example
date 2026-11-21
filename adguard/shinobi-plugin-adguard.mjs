@@ -678,6 +678,115 @@ export default function register(registry) {
       return { protectionEnabled: st.protection_enabled ?? body.enabled, resumesInMinutes: body.duration ? body.duration / 60_000 : null };
     }),
   });
+
+  // ---- dashboard page (Shinobi >= 0.4.0): sidebar → Apps → AdGuard --------
+
+  if (typeof registry.registerPage === 'function') {
+    registry.registerPage({
+      id: 'adguard',
+      title: 'AdGuard',
+      icon: 'shield',
+      order: 20,
+      render: async () => {
+        try {
+          await runDue();
+        } catch {
+          /* shown below if AdGuard is really unreachable */
+        }
+        const a = api();
+        const tz = config().timeZone;
+        const [{ clients }, stats, status] = await Promise.all([
+          clientsData(a),
+          a.get('/control/stats').catch(() => null),
+          a.get('/control/status').catch(() => null),
+        ]);
+        const clock = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+        const blocks = [];
+
+        const total = stats?.num_dns_queries ?? null;
+        const blockedCount = stats?.num_blocked_filtering ?? null;
+        const on = status?.protection_enabled !== false;
+        blocks.push({
+          type: 'stats',
+          items: [
+            { label: 'Protection', value: on ? 'On' : 'Paused', tone: on ? 'ok' : 'warn' },
+            { label: 'Requests', value: total ?? '—', hint: 'statistics period' },
+            { label: 'Blocked', value: blockedCount ?? '—', hint: total ? `${Math.round(((blockedCount ?? 0) / total) * 100)}%` : undefined },
+            { label: 'Named devices', value: clients.length },
+          ],
+        });
+        blocks.push({
+          type: 'actions',
+          buttons: on
+            ? [{ label: 'Pause filtering 10 min', tool: 'plugin_adguard_protection', args: { enabled: false, minutes: 10 }, confirm: 'Turn off ad and site blocking for every device for 10 minutes?' }]
+            : [{ label: 'Resume filtering', tool: 'plugin_adguard_protection', args: { enabled: true }, variant: 'primary' }],
+        });
+
+        // Groups with one-tap temporary allow for each service blocked in the group.
+        for (const [name, members] of Object.entries(groups())) {
+          const devs = members.map((m) => clients.find((c) => fold(c.name) === fold(m))).filter(Boolean);
+          const svc = [...new Set(devs.flatMap((c) => (c.use_global_blocked_services ? [] : (c.blocked_services ?? []))))].sort();
+          blocks.push({ type: 'heading', text: `Group: ${name}` });
+          blocks.push({
+            type: 'list',
+            items: devs.map((c) => ({
+              title: c.name,
+              subtitle: c.use_global_blocked_services ? 'global settings' : (c.blocked_services ?? []).join(', ') || 'nothing blocked',
+            })),
+            empty: 'No devices in this group.',
+          });
+          const buttons = [];
+          for (const s of svc.slice(0, 4)) {
+            buttons.push({ label: `Allow ${s} 1 h`, tool: 'plugin_adguard_services', args: { action: 'allow', target: name, services: [s], minutes: 60 }, variant: 'primary' });
+          }
+          for (const s of svc.slice(0, 4)) {
+            buttons.push({ label: `Block ${s} now`, tool: 'plugin_adguard_services', args: { action: 'block', target: name, services: [s] } });
+          }
+          if (buttons.length) blocks.push({ type: 'actions', buttons });
+        }
+
+        const temp = pending();
+        blocks.push({ type: 'heading', text: 'Temporary changes' });
+        blocks.push({
+          type: 'list',
+          items: temp
+            .slice()
+            .sort((x, y) => x.at - y.at)
+            .map((p) => ({
+              title: `${p.client}: ${p.services.join(', ')}`,
+              subtitle: `${p.action === 'block' ? 'blocked again' : 'allowed again'} at ${clock(p.at)}`,
+              badge: p.action === 'block' ? 'allowed now' : 'blocked now',
+              tone: p.action === 'block' ? 'warn' : 'muted',
+            })),
+          empty: 'None. Every block is as configured.',
+        });
+
+        const rows = [];
+        for (const c of clients) {
+          const id = (c.ids ?? [])[0];
+          let last = '';
+          if (id) {
+            const log = await a.get(`/control/querylog?limit=1&search=${encodeURIComponent(id)}`).catch(() => null);
+            const t = log?.data?.[0]?.time;
+            if (t) last = Date.now() - Date.parse(t) > DAY_MS ? 'over a day ago ⚠' : clock(Date.parse(t));
+            else last = 'never ⚠';
+          }
+          rows.push([
+            c.name,
+            (c.ids ?? []).join(', '),
+            c.use_global_blocked_services ? 'global' : (c.blocked_services ?? []).join(', ') || '—',
+            describeSchedule(c.blocked_services_schedule).join('; ') || '—',
+            last,
+          ]);
+        }
+        blocks.push({ type: 'heading', text: 'Devices' });
+        blocks.push({ type: 'table', columns: ['Device', 'IP', 'Blocked', 'Allowed windows', 'Last seen'], rows, empty: 'No named devices yet. Ask Claude to name them.' });
+        blocks.push({ type: 'text', text: '⚠ = no DNS requests for a day: the device is off, or no longer uses AdGuard as its DNS.', tone: 'muted' });
+
+        return { blocks, refreshSeconds: 30 };
+      },
+    });
+  }
 }
 
 export function describeSchedule(schedule) {

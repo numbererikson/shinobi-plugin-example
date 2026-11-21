@@ -43,6 +43,16 @@ backed up with the brain). A timer re-applies the block at 19:00. If Shinobi
 was down at that moment, the undo runs on the next start or tool call. A newer
 temporary change for the same device and service replaces the older undo.
 
+## Dashboard page
+
+On Shinobi 0.4.0 or newer the plugin adds **Apps → AdGuard** to the dashboard sidebar. The page shows:
+- protection status and request and blocked counts, with a 10-minute pause button;
+- each group with its devices, plus one-tap **Allow youtube 1 h** and **Block youtube now** buttons for every service blocked in the group;
+- running temporary changes and when they end;
+- a device table with blocked services, allowed windows and last activity. Devices silent for a day are flagged ⚠.
+
+It refreshes every 30 seconds.
+
 ## Configuration
 
 Read from the Shinobi host's environment on every call:
