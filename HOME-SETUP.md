@@ -12,6 +12,8 @@ the Claude app talks to from anywhere:
   theater's AUX input, or as a stream to a phone on the home Wi-Fi.
 - **Backups** of the brain to a private GitHub repo every night.
 - Optional: **AdGuard Home** for ad and site blocking per device.
+- **Remember plugin**: personal memory ("what's the Wi-Fi password?") and
+  reminders that arrive as push notifications on the phone.
 
 Every step after the Ubuntu install runs over SSH from another computer.
 Replace `tomislav` with the laptop user, `192.168.1.100` with the laptop's IP
@@ -377,14 +379,89 @@ recreating the container stays a one-liner.
 
 ---
 
+## 10. Reminders, memory and phone notifications
+
+Needs **Shinobi 0.7.0 or newer** (see Maintenance → Update Shinobi).
+
+### Install the Remember plugin
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/remember/shinobi-plugin-remember.mjs
+docker cp shinobi-plugin-remember.mjs shinobi:/data/plugins/
+docker restart shinobi
+docker logs shinobi 2>&1 | grep -i remember      # empty = loaded fine
+```
+
+The dashboard sidebar now shows **Remember** right after Music.
+
+Memory values are encrypted with a key the plugin creates on first use at
+`/data/remember.key`. It sits on the `shinobi-data` volume, but **not** in the
+nightly backup (the backup only carries the database). Copy it somewhere safe
+once:
+
+```bash
+docker cp shinobi:/data/remember.key ~/remember.key.backup
+```
+
+Without it, a restored backup still has the reminders and the names of the
+remembered facts, but their values cannot be read.
+
+### Push notifications on the phone
+
+Reminders arrive as push notifications, so the phone has to subscribe once.
+
+**iPhone** (iOS 16.4 or newer). Push only works from the dashboard added to
+the home screen, not from a Safari tab:
+
+1. In **Safari** open `https://shinobi.example.com`.
+2. **Share** (square with an arrow) → **Add to Home Screen** → **Add**. If you
+   see an **Open as Web App** switch, leave it on.
+3. Open **Shinobi from the home-screen icon**. The installed app does not
+   share Safari's login, so it shows a sign-in page. Enter the dashboard
+   token and press **Sign in**. To print the token on the laptop:
+   `docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN`.
+4. Tap **☰** (top left) → **Development** → **Push** → **Subscribe this
+   device**, then **Allow** when iOS asks.
+5. Tap **Test push**. A "Shinobi" notification should arrive.
+
+If iOS never asks, or nothing arrives: **Settings → Notifications → Shinobi →
+Allow Notifications**. Then open the app again and repeat step 4.
+
+iOS does not show action buttons on web notifications (at least through
+current reports). Tapping a reminder opens the **Remember** page, which has
+**Done** and **Snooze**. Android and desktop browsers show the buttons on the
+notification itself.
+
+**Android:** open the dashboard in Chrome → **⋮ → Install app** (or Add to
+Home screen), then steps 3–5 above.
+
+### Everyday phrases
+
+| Say (in a **new** Claude chat) | Does |
+| --- | --- |
+| "remember that the Wi-Fi password is XY123" | saves it, encrypted |
+| "what's the Wi-Fi password?", "what do you remember about Marko?" | recall |
+| "forget the parking spot" | deletes it |
+| "remind me in 2 minutes to try this" | quick test of the whole chain |
+| "remind me tomorrow at 9 to call the bank" | one-time reminder |
+| "every Monday at 9 remind me to send the report" | repeating reminder |
+| "what reminders do I have?" / "cancel the bank one" | list / cancel |
+
+Times are Zagreb time by default ("set Remember's time zone to Europe/London"
+changes it). Details: [remember/README.md](remember/README.md).
+
+---
+
 ## Maintenance
 
 | Task | How |
 | --- | --- |
 | Update Shinobi | `docker pull shinobiapps/shinobi:latest`, then the stop/rm/run block from step 8 |
-| Update a plugin | its `curl` + `docker cp` line from step 8, then `docker restart shinobi` |
-| Laptop reinstalled | steps 1–8 again, then restore the brain from the backup (step 5 link) and copy the music back |
+| Update a plugin | its `curl` + `docker cp` line from step 8 or 10, then `docker restart shinobi` |
+| Laptop reinstalled | steps 1–10 again, restore the brain from the backup (step 5 link), copy `remember.key.backup` back to `/data/remember.key`, and copy the music back |
+| Phone app asks for the token again | the sign-in lasts 30 days. Enter the token again on the sign-in page |
 | Something is off | `docker logs shinobi 2>&1 \| grep -iv token \| tail`, `journalctl --user -u mpd -n 20` |
 
 Per-plugin details: [music/README.md](music/README.md),
-[fitness/README.md](fitness/README.md).
+[fitness/README.md](fitness/README.md), [adguard/README.md](adguard/README.md),
+[remember/README.md](remember/README.md).
