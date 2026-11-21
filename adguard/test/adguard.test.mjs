@@ -223,7 +223,9 @@ test('a short temporary change reverts by its own timer', async () => {
   state.set('pending', state.get('pending').map((p) => ({ ...p, at: Date.now() + 50 })));
   // Re-register so the timers are armed from the shortened state, as after a restart.
   loadTools({ state });
-  await new Promise((r) => setTimeout(r, 300));
+  // Wait for the revert itself, not a fixed delay: a busy CI runner can take longer than a few hundred ms.
+  const deadline = Date.now() + 5000;
+  while (state.get('pending')?.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
   assert.deepEqual(client('TV dnevna').blocked_services, ['youtube']);
   assert.deepEqual(state.get('pending'), []);
 });
