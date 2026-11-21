@@ -1,0 +1,8 @@
+[Unit]
+Description=Shinobi announcements: watch for new messages
+
+[Path]
+PathExistsGlob=%h/.mpd/say/*.txt
+
+[Install]
+WantedBy=default.target

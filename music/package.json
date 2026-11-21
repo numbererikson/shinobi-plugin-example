@@ -1,6 +1,6 @@
 {
   "name": "shinobi-plugin-music",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Shinobi plugin — play, pause, skip and browse a local MPD music library by voice through any MCP client. Single file, zero runtime dependencies.",
   "type": "module",
   "main": "./shinobi-plugin-music.mjs",
@@ -9,7 +9,8 @@
   },
   "files": [
     "shinobi-plugin-music.mjs",
-    "README.md"
+    "README.md",
+    "host/"
   ],
   "scripts": {
     "test": "node --test test/music.test.mjs"

@@ -1,6 +1,9 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import register, { quote, parseSongs, mpdConfigFromEnv, fold, matchFolders } from '../shinobi-plugin-music.mjs';
 
@@ -25,7 +28,7 @@ const freshOutputs = () => [
   { id: 0, name: 'Kucno kino', enabled: true },
   { id: 1, name: 'Mobitel stream', enabled: false },
 ];
-const server = { log: [], queue: [], state: 'stop', volume: 50, current: -1, password: null, nextId: 1, outputs: freshOutputs() };
+const server = { log: [], queue: [], state: 'stop', volume: 50, current: -1, elapsed: 0, password: null, nextId: 1, outputs: freshOutputs() };
 let tcp;
 let port;
 
@@ -50,7 +53,7 @@ function matches(song, [tag, value]) {
 
 function songLines(song) {
   const lines = [`file: ${song.file}`];
-  for (const [k, label] of [['artist', 'Artist'], ['title', 'Title'], ['album', 'Album'], ['genre', 'Genre']]) {
+  for (const [k, label] of [['artist', 'Artist'], ['title', 'Title'], ['album', 'Album'], ['genre', 'Genre'], ['duration', 'duration']]) {
     if (song[k]) lines.push(`${label}: ${song[k]}`);
   }
   return lines;
@@ -128,8 +131,38 @@ function execute(cmd) {
       return { lines: [] };
     case 'status': {
       const lines = [`volume: ${server.volume}`, 'repeat: 0', 'random: 0', `playlistlength: ${server.queue.length}`, `state: ${server.state}`];
-      if (server.current >= 0 && server.queue[server.current]) lines.push(`songid: ${server.queue[server.current].id}`);
+      if (server.current >= 0 && server.queue[server.current]) {
+        lines.push(`song: ${server.current}`, `songid: ${server.queue[server.current].id}`, `elapsed: ${server.elapsed}`);
+      }
       return { lines };
+    }
+    case 'lsinfo': {
+      const song = LIBRARY.find((x) => x.file === unquote(rest.slice(1, -1)));
+      return song ? { lines: songLines(song) } : { ack: '[50@0] {lsinfo} Not found' };
+    }
+    case 'addid': {
+      const m = /^"((?:[^"\\]|\\.)*)"(?:\s+(\d+))?$/.exec(rest);
+      const song = m && LIBRARY.find((x) => x.file === unquote(m[1]));
+      if (!song) return { ack: '[50@0] {addid} No such song' };
+      const pos = m[2] !== undefined ? Number(m[2]) : server.queue.length;
+      const entry = { ...song, id: server.nextId++ };
+      server.queue.splice(pos, 0, entry);
+      if (server.current >= pos) server.current += 1;
+      return { lines: [`Id: ${entry.id}`] };
+    }
+    case 'playid': {
+      const idx = server.queue.findIndex((x) => x.id === Number(rest));
+      if (idx < 0) return { ack: '[50@0] {playid} No such song' };
+      server.current = idx;
+      server.elapsed = 0;
+      server.state = 'play';
+      return { lines: [] };
+    }
+    case 'seekid': {
+      const [id, t] = rest.split(' ');
+      if (!server.queue.some((x) => x.id === Number(id))) return { ack: '[50@0] {seekid} No such song' };
+      server.elapsed = Number(t);
+      return { lines: [] };
     }
     case 'currentsong':
       return { lines: server.current >= 0 && server.queue[server.current] ? songLines(server.queue[server.current]) : [] };
@@ -208,7 +241,7 @@ before(async () => {
 after(() => new Promise((resolve) => tcp.close(resolve)));
 
 beforeEach(() => {
-  Object.assign(server, { log: [], queue: [], state: 'stop', volume: 50, current: -1, password: null, nextId: 1, outputs: freshOutputs() });
+  Object.assign(server, { log: [], queue: [], state: 'stop', volume: 50, current: -1, elapsed: 0, password: null, nextId: 1, outputs: freshOutputs() });
   delete process.env.SHINOBI_MPD_PASSWORD;
 });
 
@@ -251,7 +284,7 @@ function loadTools({ state = memoryStore(), pages: withPages = true } = {}) {
 
 // ---- Tests ------------------------------------------------------------------
 
-test('registers the nine music tools', () => {
+test('registers the ten music tools', () => {
   const { names } = loadTools();
   assert.deepEqual(names.sort(), [
     'plugin_music_banned',
@@ -261,6 +294,7 @@ test('registers the nine music tools', () => {
     'plugin_music_output',
     'plugin_music_play',
     'plugin_music_rescan',
+    'plugin_music_say',
     'plugin_music_status',
     'plugin_music_volume',
   ]);
@@ -541,6 +575,132 @@ test('dashboard page shows the player and only uses the plugin\'s own tools', as
 
 test('hosts without registerPage still load every tool', () => {
   const { names, pages } = loadTools({ pages: false });
-  assert.equal(names.length, 9);
+  assert.equal(names.length, 10);
   assert.equal(pages.size, 0);
 });
+
+// ---- announcements ----------------------------------------------------------
+
+/** Stand-in for the host helper: turns <id>.txt into a library clip + <id>.done. */
+function fakeHelper(dir, { clipEndsAfterMs = 150 } = {}) {
+  const spoken = [];
+  const timer = setInterval(() => {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.txt')) continue;
+      const id = f.slice(0, -4);
+      spoken.push(readFileSync(join(dir, f), 'utf8').trim());
+      renameSync(join(dir, f), join(dir, `${id}.seen`));
+      LIBRARY.push({ file: `_shinobi_say/${id}.wav`, title: 'announcement', duration: '1.0' });
+      writeFileSync(join(dir, `${id}.done`), '');
+    }
+    // A clip that is playing ends shortly after it starts: MPD moves on.
+    const cur = server.queue[server.current];
+    if (cur && cur.file.startsWith('_shinobi_say/') && server.state === 'play') {
+      cur.playingSince ??= Date.now();
+      if (Date.now() - cur.playingSince > clipEndsAfterMs) {
+        server.current += 1;
+        server.elapsed = 0;
+        if (server.current >= server.queue.length) {
+          server.current = -1;
+          server.state = 'stop';
+        }
+      }
+    }
+  }, 20);
+  return {
+    spoken,
+    stop() {
+      clearInterval(timer);
+      for (let i = LIBRARY.length - 1; i >= 0; i--) if (LIBRARY[i].file.startsWith('_shinobi_say/')) LIBRARY.splice(i, 1);
+    },
+  };
+}
+
+function sayDir() {
+  const dir = mkdtempSync(join(tmpdir(), 'shinobi-say-'));
+  process.env.SHINOBI_SAY_DIR = dir;
+  return dir;
+}
+
+test('say interrupts the music, plays the message, then resumes the song where it was', async () => {
+  const dir = sayDir();
+  const helper = fakeHelper(dir);
+  try {
+    const { call } = loadTools();
+    await call('plugin_music_play', { artist: 'Thompson', shuffle: false });
+    const song = server.queue[server.current];
+    server.elapsed = 42.5;
+    const res = await call('plugin_music_say', { text: '  Ručak   je gotov ', wait: true });
+    assert.deepEqual(helper.spoken, ['Ručak je gotov']);
+    assert.equal(res.spoken, 'Ručak je gotov');
+    assert.equal(res.interruptedMusic, true);
+    assert.equal(res.finished, true);
+    assert.ok(server.log.some((c) => /^addid "_shinobi_say\/.+\.wav" 1$/.test(c)), 'clip goes right after the current song');
+    assert.equal(server.queue[server.current].id, song.id, 'back on the interrupted song');
+    assert.equal(server.elapsed, 42.5, 'at the same second');
+    assert.equal(server.state, 'play');
+    assert.ok(!server.queue.some((x) => x.file.startsWith('_shinobi_say/')), 'clip removed from the queue');
+    assert.deepEqual(readdirSync(dir).filter((f) => !f.endsWith('.seen')), [], 'request files cleaned up');
+  } finally {
+    helper.stop();
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.SHINOBI_SAY_DIR;
+  }
+});
+
+test('say with nothing playing plays the message and stops again', async () => {
+  const dir = sayDir();
+  const helper = fakeHelper(dir);
+  try {
+    const { call } = loadTools();
+    const res = await call('plugin_music_say', { text: 'Dođi gore', wait: true });
+    assert.equal(res.interruptedMusic, false);
+    assert.equal(server.state, 'stop');
+    assert.equal(server.queue.length, 0);
+  } finally {
+    helper.stop();
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.SHINOBI_SAY_DIR;
+  }
+});
+
+test('say explains a missing folder or a silent host helper', async () => {
+  const { call } = loadTools();
+  process.env.SHINOBI_SAY_DIR = join(tmpdir(), 'shinobi-say-does-not-exist');
+  await assert.rejects(call('plugin_music_say', { text: 'hello' }), /folder .* is missing/);
+  const dir = sayDir();
+  process.env.SHINOBI_SAY_TIMEOUT_MS = '300';
+  try {
+    await assert.rejects(call('plugin_music_say', { text: 'hello' }), /speech helper did not answer/);
+    assert.deepEqual(readdirSync(dir), [], 'the unanswered request is withdrawn');
+    await assert.rejects(call('plugin_music_say', { text: '   ' }), /nothing to say/);
+  } finally {
+    delete process.env.SHINOBI_SAY_TIMEOUT_MS;
+    delete process.env.SHINOBI_SAY_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('announcement clips are never queued as music and never shown as a folder', async () => {
+  LIBRARY.push({ file: '_shinobi_say/old.wav', title: 'announcement' });
+  try {
+    const { call, pages } = loadTools();
+    const res = await call('plugin_music_play', { query: 'shinobi_say' });
+    assert.equal(res.found, 0);
+    process.env.SHINOBI_SAY_DIR = tmpdir();
+    process.env.SHINOBI_SAY_PRESETS = 'Ručak je gotov | Dođi gore';
+    const { blocks } = await pages.get('music').render();
+    const buttons = blocks.filter((b) => b.type === 'actions').flatMap((b) => b.buttons);
+    assert.ok(!buttons.some((b) => b.label.startsWith('_shinobi_say')));
+    assert.deepEqual(blocks.find((b) => b.type === 'input'), { type: 'input', placeholder: 'Type a message to say on the speaker', button: '🔊 Say', tool: 'plugin_music_say', arg: 'text', maxLength: 500 });
+    assert.deepEqual(
+      buttons.filter((b) => b.tool === 'plugin_music_say').map((b) => b.args.text),
+      ['Ručak je gotov', 'Dođi gore'],
+    );
+  } finally {
+    LIBRARY.pop();
+    delete process.env.SHINOBI_SAY_DIR;
+    delete process.env.SHINOBI_SAY_PRESETS;
+  }
+});
+
