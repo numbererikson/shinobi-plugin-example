@@ -424,8 +424,21 @@ the home screen, not from a Safari tab:
    device**, then **Allow** when iOS asks.
 5. Tap **Test push**. A "Shinobi" notification should arrive.
 
-If iOS never asks, or nothing arrives: **Settings → Notifications → Shinobi →
-Allow Notifications**. Then open the app again and repeat step 4.
+If iOS never asks: **Settings → Notifications → Shinobi → Allow
+Notifications**, then open the app again and repeat step 4.
+
+If **Test push** fails, the reason is on the Push page under the device
+("last error") and in the log:
+
+```bash
+docker logs shinobi 2>&1 | grep web-push | tail -3
+```
+
+| Reason | Fix |
+| --- | --- |
+| `403` / `BadJwtToken` | Shinobi older than 0.7.2 sends a contact address Apple rejects. Update Shinobi (no re-subscribe needed). |
+| `410` | The subscription expired. It is removed automatically; press **Subscribe this device** again. |
+| `ENOTFOUND` / timeout | The laptop cannot reach the push service. Check its internet and DNS (AdGuard). |
 
 iOS does not show action buttons on web notifications (at least through
 current reports). Tapping a reminder opens the **Remember** page, which has
