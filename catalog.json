@@ -1,0 +1,28 @@
+{
+  "plugins": [
+    {
+      "id": "music",
+      "name": "Music",
+      "description": "Play your MP3 library on the home speaker by voice: folders as genres, skip & ban, phone stream, announcements. Needs MPD on the host.",
+      "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/music/shinobi-plugin-music.mjs"
+    },
+    {
+      "id": "adguard",
+      "name": "AdGuard",
+      "description": "Run AdGuard Home by voice: device groups, block/allow services with timed undo, schedules, activity. Needs AdGuard Home.",
+      "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/adguard/shinobi-plugin-adguard.mjs"
+    },
+    {
+      "id": "remember",
+      "name": "Remember",
+      "description": "Personal memory (encrypted) and reminders with push notifications.",
+      "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/remember/shinobi-plugin-remember.mjs"
+    },
+    {
+      "id": "fitness",
+      "name": "Fitness",
+      "description": "A 180-day training mission: today's workout, pain-aware restrictions, weight and habit streaks.",
+      "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs"
+    }
+  ]
+}

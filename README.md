@@ -15,6 +15,8 @@ Slack.
 
 ## Plugins in this repo
 
+Shinobi's dashboard (Plugins → Catalog) installs them with one click from [`catalog.json`](catalog.json). Add new plugins there.
+
 | Plugin | Path | What it shows |
 | --- | --- | --- |
 | `shinobi-plugin-example` | root (`index.mjs`) | Minimal read-only plugin — one tool over the read-only `ShinobiApi`. |
