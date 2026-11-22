@@ -21,6 +21,7 @@ const TIMEOUT_MS = 8000;
 const GROUPS_KEY = 'groups';
 const PENDING_KEY = 'pending';
 const RETRY_MS = 60_000;
+const TIMER_SLACK_MS = 1000;
 const MAX_TIMER_MS = 2_000_000_000; // setTimeout limit is ~24.8 days
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DAY_MS = 86_400_000;
@@ -249,9 +250,11 @@ export default function register(registry) {
 
   const timers = new Map();
 
-  async function runDue() {
+  async function runDue(slackMs = 0) {
     if (!store) return;
-    const now = Date.now();
+    // Timers can fire a millisecond before Date.now() reaches their deadline;
+    // the timer path passes some slack so its own entry is never skipped.
+    const now = Date.now() + slackMs;
     const due = pending().filter((p) => p.at <= now);
     if (due.length === 0) return;
     const a = api();
@@ -271,10 +274,13 @@ export default function register(registry) {
     const t = setTimeout(async () => {
       timers.delete(entry.id);
       try {
-        await runDue();
+        await runDue(TIMER_SLACK_MS);
       } catch {
-        if (pending().some((p) => p.id === entry.id)) arm({ ...entry, at: Date.now() + RETRY_MS });
+        /* AdGuard unreachable: retried below */
       }
+      // Still pending (AdGuard was down, or the entry moved later): try again.
+      const still = pending().find((p) => p.id === entry.id);
+      if (still) arm({ ...still, at: Math.max(still.at, Date.now() + RETRY_MS) });
     }, delay);
     t.unref?.();
     timers.set(entry.id, t);
