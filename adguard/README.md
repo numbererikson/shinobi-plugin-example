@@ -69,41 +69,28 @@ Read from the Shinobi host's environment on every call:
 From inside the container, AdGuard is reached at the host's LAN address; it
 does not need to be published anywhere else.
 
-Keep every Shinobi setting in one env file readable only by you. It replaces
-the long list of `-e` flags. The token is copied from the running container
-without being printed, and the AdGuard password is typed at a hidden prompt:
+Add the AdGuard settings to the `shinobi.env` next to `compose.yaml` (see
+HOME-SETUP step 2). The password is typed at a hidden prompt:
 
 ```bash
-umask 077
+cd ~/shinobi-server
 {
-  echo "SHINOBI_DASHBOARD_TOKEN=$(docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN)"
-  echo "SHINOBI_MPD_SOCKET=/mpd/socket"            # only if the music plugin is used
   echo "SHINOBI_ADGUARD_URL=http://192.168.1.100"
   echo "SHINOBI_ADGUARD_USER=admin"                # your AdGuard login name
   read -r -s -p "AdGuard password: " P; echo >&2; echo "SHINOBI_ADGUARD_PASSWORD=$P"; unset P
-  echo "TZ=Europe/Zagreb"
-} > ~/shinobi.env
-grep -c '^SHINOBI_DASHBOARD_TOKEN=.\{48\}$' ~/shinobi.env   # must print 1, or STOP: the token was not copied
+  grep -q '^TZ=' shinobi.env || echo "TZ=Europe/Zagreb"
+} >> shinobi.env
+docker compose up -d                               # picks up the new settings
 ```
 
-Install the plugin and recreate the container from the env file. The data
-volume is untouched.
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/adguard/shinobi-plugin-adguard.mjs
-docker cp shinobi-plugin-adguard.mjs shinobi:/data/plugins/
-docker stop shinobi && docker rm shinobi
-docker run -d --name shinobi --restart unless-stopped -p 127.0.0.1:8765:8765 \
-  -v shinobi-data:/data -v "$HOME/.mpd:/mpd" \
-  --env-file ~/shinobi.env \
-  shinobiapps/shinobi:latest
-```
+Then install the plugin: Dashboard → **Plugins → Catalog → AdGuard →
+Install → Restart now**.
 
 Check from the laptop. The token is read from the env file and not shown:
 
 ```bash
 curl -s http://127.0.0.1:8765/mcp \
-  -H "Authorization: Bearer $(grep ^SHINOBI_DASHBOARD_TOKEN= ~/shinobi.env | cut -d= -f2)" \
+  -H "Authorization: Bearer $(grep ^SHINOBI_DASHBOARD_TOKEN= ~/shinobi-server/shinobi.env | cut -d= -f2)" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plugin_adguard_devices","arguments":{}}}'
 ```

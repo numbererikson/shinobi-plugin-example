@@ -10,12 +10,14 @@ the Claude app talks to from anywhere:
 - **Music plugin**: "play rock", "play Led Zeppelin", "next", "this one
   annoys me", playing through the laptop's headphone jack into a home
   theater's AUX input, or as a stream to a phone on the home Wi-Fi.
-- **Backups** of the brain to a private GitHub repo every night.
+- **Backups** of the brain to a private GitHub repo every night, with a phone
+  alert when one fails.
 - Optional: **AdGuard Home** for ad and site blocking per device.
 - **Remember plugin**: personal memory ("what's the Wi-Fi password?") and
   reminders that arrive as push notifications on the phone.
 
-Every step after the Ubuntu install runs over SSH from another computer.
+Needs **Shinobi 0.8.0 or newer**. Every step after the Ubuntu install runs
+over SSH from another computer.
 Replace `tomislav` with the laptop user, `192.168.1.100` with the laptop's IP
 and `example.com` with your domain.
 
@@ -64,26 +66,33 @@ ssh tomislav@192.168.1.100
 ## 2. Docker and Shinobi
 
 ```bash
-sudo apt update && sudo apt install -y docker.io git curl
+sudo apt update && sudo apt install -y docker.io docker-compose-v2 git curl
 sudo usermod -aG docker tomislav
 exit                                   # reconnect so the docker group applies
 ```
 
-Run Shinobi with a new dashboard token. **Save the printed token in a
-password manager**: every client needs it.
+Shinobi runs from a folder with two files: `compose.yaml` (how to run it)
+and `shinobi.env` (settings and the dashboard token, readable only by you).
 
 ```bash
-TOKEN=$(openssl rand -hex 24) && echo "SAVE THIS: $TOKEN"
-docker run -d --name shinobi --restart unless-stopped \
-  -p 127.0.0.1:8765:8765 \
-  -v shinobi-data:/data \
-  -e SHINOBI_DASHBOARD_TOKEN="$TOKEN" \
-  shinobiapps/shinobi:latest
+mkdir ~/shinobi-server && cd ~/shinobi-server
+curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi/main/compose.yaml
+umask 077
+{
+  echo "SHINOBI_DASHBOARD_TOKEN=$(openssl rand -hex 24)"
+  echo "SHINOBI_TIMEZONE=Europe/Zagreb"
+  echo "TZ=Europe/Zagreb"
+} > shinobi.env
+docker compose up -d
+docker compose ps                      # shinobi ... (healthy) after ~20 s
 curl http://127.0.0.1:8765/health      # {"ok":true,...}
 ```
 
-The `shinobi-data` volume holds the database. Replacing the container never
-touches it.
+**Save the token in a password manager**: every client needs it. Show it
+with `grep TOKEN ~/shinobi-server/shinobi.env`. It is never printed in logs.
+
+The `shinobi-data` volume holds the database, plugins and keys. Recreating
+or upgrading the container never touches it.
 
 ---
 
@@ -104,8 +113,13 @@ Cloudflare dashboard → **Zero Trust** (first time: pick the **Free** plan).
    Version = 1.2**. A 1.3 minimum breaks every call from Claude's cloud.
 
 Test from the phone: `https://shinobi.example.com/health` → `{"ok":true}`.
-The dashboard is at `https://shinobi.example.com/?token=YOUR_TOKEN` (open it
-once; a cookie keeps you logged in).
+Open `https://shinobi.example.com`: a sign-in page asks for the token once,
+then the browser stays signed in for 30 days.
+
+**Optional, recommended before sharing the address:** put Cloudflare Access
+in front of the dashboard. It adds an email login that lasts a month per
+device, and it leaves `/mcp` and the OAuth pages open for Claude:
+[cloudflare-access.md](https://github.com/numbererikson/shinobi/blob/main/docs/cloudflare-access.md).
 
 ---
 
@@ -114,14 +128,17 @@ once; a cookie keeps you logged in).
 claude.ai → **Settings → Connectors → Add custom connector**:
 
 - Name: `Shinobi`
-- URL: `https://shinobi.example.com/mcp` (only the URL: no token, no headers)
+- URL: `https://shinobi.example.com/mcp/home` (only the URL: no token, no headers)
+
+`/mcp/home` carries the home tools only (music, AdGuard, Remember, fitness),
+so everyday chats are not crowded with development tools. `/mcp` carries
+everything. Use that one for Claude Code.
 
 Press **Connect**. A Shinobi page asks "Allow Claude?". Enter your dashboard
 token once, or just press **Allow** if this browser is already signed in to
 the dashboard. Claude gets its own revocable access, listed in the dashboard
-under **Settings → Connected apps**. This needs Shinobi 0.5.0 or newer. On
-older versions, put the token in the URL instead:
-`https://shinobi.example.com/mcp?token=YOUR_TOKEN`.
+under **Settings → Connected apps**. Never put the token in the URL: Shinobi
+does not accept it there.
 
 The connector syncs to the phone app. Tools appear in **new** chats. A chat
 that was already open keeps the tool list it started with.
@@ -129,8 +146,10 @@ that was already open keeps the tool list it started with.
 For Claude Code on a computer:
 
 ```bash
+read -s -p "Shinobi token: " T; echo
 claude mcp add --transport http shinobi https://shinobi.example.com/mcp \
-  --header "Authorization: Bearer YOUR_TOKEN"
+  --header "Authorization: Bearer $T"
+unset T
 ```
 
 ---
@@ -150,8 +169,17 @@ docker exec shinobi git -C /data/sync config user.name "shinobi-server"
 docker exec shinobi git -C /data/sync config user.email "shinobi@localhost"
 docker exec shinobi node /app/dist/cli.js sync init /data/sync
 docker exec shinobi node /app/dist/cli.js sync push
-( crontab -l 2>/dev/null; echo '0 3 * * * docker exec shinobi node /app/dist/cli.js sync push' ) | crontab -
 ```
+
+From now on Shinobi pushes a snapshot **every night at 03:17** by itself
+(`SHINOBI_BACKUP_CRON` in `shinobi.env` changes the time). If a push fails,
+or there has been no backup for 26 hours, the phone gets a push notification
+(set up in step 10), and the **Sync** panel at the bottom of the sidebar
+shows the error. An old `docker exec … sync push` line in `crontab -e` can
+be deleted.
+
+A server that is down cannot warn about itself. Add a free uptime monitor
+(UptimeRobot, Better Stack, …) on `https://shinobi.example.com/health`.
 
 To restore after a reinstall, see Shinobi's
 [recovery runbook](https://github.com/numbererikson/shinobi/blob/main/docs/recovery-runbook.md).
@@ -277,39 +305,34 @@ seconds.
 
 ## 8. Install the plugins
 
-Both plugins are single files dropped into Shinobi's plugin folder. The
-container is then recreated with the MPD socket mounted. The database and
-the token are kept.
+The music plugin talks to MPD through its socket, so give the container that
+folder first. In `~/shinobi-server/compose.yaml` remove the `#` in front of
+`- ${HOME}/.mpd:/mpd`, then:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs
-curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/music/shinobi-plugin-music.mjs
-docker exec shinobi mkdir -p /data/plugins
-docker cp shinobi-plugin-fitness.mjs shinobi:/data/plugins/
-docker cp shinobi-plugin-music.mjs shinobi:/data/plugins/
-
-TOKEN=$(docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN)
-echo ${#TOKEN}                         # must be 48; if 0, STOP: the token would be lost
-docker stop shinobi && docker rm shinobi
-docker run -d --name shinobi --restart unless-stopped -p 127.0.0.1:8765:8765 \
-  -v shinobi-data:/data -v "$HOME/.mpd:/mpd" \
-  -e SHINOBI_DASHBOARD_TOKEN="$TOKEN" -e SHINOBI_MPD_SOCKET=/mpd/socket \
-  shinobiapps/shinobi:latest
+cd ~/shinobi-server
+echo "SHINOBI_MPD_SOCKET=/mpd/socket" >> shinobi.env
+docker compose up -d
 ```
 
-Check it. The full log prints the token, so always filter it. Empty output
-from the second command is good: only failures are logged.
+Then in the dashboard: **Plugins → Plugins on this server → Catalog** →
+**Install** next to Music and Fitness → **Restart now**. The sidebar shows
+the new modules after the reload. **Settings → Modules** switches any of them
+off without uninstalling.
+
+Check it. Empty output from the second command is good: only failures are
+logged.
 
 ```bash
-docker ps --format '{{.Names}} {{.Status}}'           # shinobi Up ...
-docker logs shinobi 2>&1 | grep -iE "plugin|music"
+docker compose ps                                     # shinobi ... (healthy)
+docker compose logs shinobi 2>&1 | grep -iE "plugin|music"
 ```
 
 Test playback directly on the laptop:
 
 ```bash
 curl -s http://127.0.0.1:8765/mcp \
-  -H "Authorization: Bearer $(docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN)" \
+  -H "Authorization: Bearer $(grep ^SHINOBI_DASHBOARD_TOKEN= ~/shinobi-server/shinobi.env | cut -d= -f2)" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plugin_music_play","arguments":{"query":"rock"}}}'
 ```
@@ -374,8 +397,8 @@ The [AdGuard plugin](adguard/README.md) lets the Claude app manage this:
 - "what was the kids' PC doing today?";
 - "pause ad blocking for 10 minutes".
 
-Its README moves all Shinobi settings into one `~/shinobi.env` file, so
-recreating the container stays a one-liner.
+Install it from **Plugins → Catalog** and add its settings to
+`~/shinobi-server/shinobi.env` as its README shows.
 
 ---
 
@@ -385,14 +408,8 @@ Needs **Shinobi 0.7.0 or newer** (see Maintenance → Update Shinobi).
 
 ### Install the Remember plugin
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/remember/shinobi-plugin-remember.mjs
-docker cp shinobi-plugin-remember.mjs shinobi:/data/plugins/
-docker restart shinobi
-docker logs shinobi 2>&1 | grep -i remember      # empty = loaded fine
-```
-
-The dashboard sidebar now shows **Remember** right after Music.
+Dashboard → **Plugins → Catalog** → **Install** next to Remember →
+**Restart now**. The sidebar now shows **Remember** right after Music.
 
 Memory values are encrypted with a key the plugin creates on first use at
 `/data/remember.key`. It sits on the `shinobi-data` volume, but **not** in the
@@ -404,7 +421,8 @@ docker cp shinobi:/data/remember.key ~/remember.key.backup
 ```
 
 Without it, a restored backup still has the reminders and the names of the
-remembered facts, but their values cannot be read.
+remembered facts, but their values cannot be read. The Remember page keeps a
+warning up until you press **I've backed it up**.
 
 ### Push notifications on the phone
 
@@ -418,8 +436,8 @@ the home screen, not from a Safari tab:
    see an **Open as Web App** switch, leave it on.
 3. Open **Shinobi from the home-screen icon**. The installed app does not
    share Safari's login, so it shows a sign-in page. Enter the dashboard
-   token and press **Sign in**. To print the token on the laptop:
-   `docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN`.
+   token and press **Sign in**. To show the token on the laptop:
+   `grep TOKEN ~/shinobi-server/shinobi.env`.
 4. Tap **☰** (top left) → **Development** → **Push** → **Subscribe this
    device**, then **Allow** when iOS asks.
 5. Tap **Test push**. A "Shinobi" notification should arrive.
@@ -469,11 +487,34 @@ changes it). Details: [remember/README.md](remember/README.md).
 
 | Task | How |
 | --- | --- |
-| Update Shinobi | `docker pull shinobiapps/shinobi:latest`, then the stop/rm/run block from step 8 |
-| Update a plugin | its `curl` + `docker cp` line from step 8 or 10, then `docker restart shinobi` |
+| Update Shinobi | `cd ~/shinobi-server && docker compose pull && docker compose up -d` |
+| Update a plugin | Dashboard → **Plugins → Check for updates → Update → Restart now** |
 | Laptop reinstalled | steps 1–10 again, restore the brain from the backup (step 5 link), copy `remember.key.backup` back to `/data/remember.key`, and copy the music back |
 | Phone app asks for the token again | the sign-in lasts 30 days. Enter the token again on the sign-in page |
-| Something is off | `docker logs shinobi 2>&1 \| grep -iv token \| tail`, `journalctl --user -u mpd -n 20` |
+| Something is off | `cd ~/shinobi-server && docker compose logs --tail 30 shinobi`, `journalctl --user -u mpd -n 20` |
+
+### Moving an older `docker run` install to compose
+
+For a server set up before 0.8.0. The database, plugins and keys stay on
+the same `shinobi-data` volume.
+
+```bash
+mkdir -p ~/shinobi-server && cd ~/shinobi-server
+curl -fsSLO https://raw.githubusercontent.com/numbererikson/shinobi/main/compose.yaml
+[ -f ~/shinobi.env ] && mv ~/shinobi.env shinobi.env       # the env file from the AdGuard README, if you made one
+[ -f shinobi.env ] || (umask 077; echo "SHINOBI_DASHBOARD_TOKEN=$(docker exec shinobi printenv SHINOBI_DASHBOARD_TOKEN)" > shinobi.env)
+grep -c '^SHINOBI_DASHBOARD_TOKEN=.\{48\}$' shinobi.env  # must print 1, or STOP
+grep -q '^SHINOBI_TIMEZONE=' shinobi.env || echo "SHINOBI_TIMEZONE=Europe/Zagreb" >> shinobi.env
+sed -i 's|# - ${HOME}/.mpd:/mpd|- ${HOME}/.mpd:/mpd|' compose.yaml   # only if you use the music plugin
+docker pull shinobiapps/shinobi:latest
+docker stop shinobi && docker rm shinobi && docker compose up -d
+docker compose ps                                          # (healthy) after ~20 s
+crontab -l | grep -v 'sync push' | crontab -               # the nightly backup is built in now
+```
+
+In the Claude app, change the connector URL to
+`https://shinobi.example.com/mcp/home`: remove the connector, add it again
+and press **Connect**.
 
 Per-plugin details: [music/README.md](music/README.md),
 [fitness/README.md](fitness/README.md), [adguard/README.md](adguard/README.md),
