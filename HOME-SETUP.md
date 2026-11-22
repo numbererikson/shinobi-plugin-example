@@ -438,7 +438,7 @@ the home screen, not from a Safari tab:
    share Safari's login, so it shows a sign-in page. Enter the dashboard
    token and press **Sign in**. To show the token on the laptop:
    `grep TOKEN ~/shinobi-server/shinobi.env`.
-4. Tap **☰** (top left) → **Development** → **Push** → **Subscribe this
+4. Tap **☰** (top left) → **Push notifications** → **Subscribe this
    device**, then **Allow** when iOS asks.
 5. Tap **Test push**. A "Shinobi" notification should arrive.
 
