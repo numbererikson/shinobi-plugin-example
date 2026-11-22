@@ -76,7 +76,9 @@ nightly `shinobi sync` never carries readable secrets:
 
 **Back up the key file** (`docker cp shinobi:/data/remember.key .`). A database
 restored without it still has the reminders and the memory keys, but the
-values cannot be read.
+values cannot be read. Until you confirm the backup ("I've backed it up" on
+the Remember page, or tell Claude), the page shows a warning. A new key file
+asks again.
 
 ## Moving from LIMAlife
 

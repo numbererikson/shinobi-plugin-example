@@ -290,8 +290,25 @@ test('page sits right after Music and never shows memory values', async () => {
   assert.ok(!json.includes('XY123'));
   assert.ok(json.includes('Banka'));
   assert.equal(blocks[0].items[0].value, '1', 'one due');
-  const actions = blocks.find((b) => b.type === 'actions');
+  const actions = blocks.find((b) => b.type === 'actions' && b.buttons[0].tool === 'plugin_remember_done');
   assert.deepEqual(actions.buttons.map((b) => b.tool), ['plugin_remember_done', 'plugin_remember_snooze', 'plugin_remember_snooze']);
+});
+
+test('page nags about backing up the key until acknowledged for that key', () => {
+  const h = host();
+  const page = h.pages.get('remember');
+  const nag = () => JSON.stringify(page.render().blocks).includes('Back up the encryption key');
+  assert.equal(nag(), false, 'nothing to lose yet');
+  h.call('plugin_remember_save', { key: 'wifi', value: 'XY123' });
+  assert.equal(nag(), true);
+  assert.equal(h.call('plugin_remember_settings', {}).key_backed_up, false);
+  const button = page.render().blocks.find((b) => b.type === 'actions').buttons[0];
+  h.call(button.tool, button.args);
+  assert.equal(nag(), false);
+  assert.equal(h.call('plugin_remember_settings', {}).key_backed_up, true);
+  // A different key (e.g. recreated file) asks again.
+  h.store.set('settings', JSON.stringify({ key_backup: { fingerprint: 'other', at: 'x' } }));
+  assert.equal(nag(), true);
 });
 
 test('works on a host without schedule/notify (memory only)', () => {
