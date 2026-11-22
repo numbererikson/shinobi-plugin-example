@@ -21,7 +21,7 @@
 //                               first use with mode 0600. Back it up: without it
 //                               stored values cannot be read.
 
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -197,6 +197,11 @@ export function keyFilePath(env = process.env) {
   return env.SHINOBI_REMEMBER_KEY_FILE || join(env.SHINOBI_CONFIG_DIR || join(homedir(), '.shinobi'), 'remember.key');
 }
 
+/** Short, non-secret id of the current key, so a backup acknowledgement is tied to that key. */
+export function keyFingerprint() {
+  return createHash('sha256').update(loadKey().key).digest('hex').slice(0, 12);
+}
+
 /** Load (or on first use create) the 32-byte key. */
 export function loadKey(env = process.env) {
   if (cachedKey) return cachedKey;
@@ -275,6 +280,8 @@ export default function register(registry) {
   const timeZone = () => state.get('settings')?.timezone ?? DEFAULT_TIMEZONE;
   const memories = () => state.get('memories') ?? {};
   const reminders = () => state.get('reminders') ?? emptyReminders();
+  // A key from SHINOBI_REMEMBER_KEY lives in the env file the owner already manages.
+  const keyBackedUp = () => loadKey().source === 'env' || state.get('settings')?.key_backup?.fingerprint === keyFingerprint();
 
   const view = (r, tz) => ({
     id: r.id,
@@ -564,10 +571,14 @@ export default function register(registry) {
   registry.registerTool({
     name: 'plugin_remember_settings',
     description:
-      'Show or change settings: the time zone reminders use (IANA name, default Europe/Zagreb) and where the encryption key lives.',
+      'Show or change settings: the time zone reminders use (IANA name, default Europe/Zagreb) and where the encryption key lives. ' +
+      'Set key_backed_up: true once the user confirms the key file is copied somewhere safe.',
     inputSchema: {
       type: 'object',
-      properties: { timezone: { type: 'string', description: "IANA zone, e.g. 'Europe/Zagreb'." } },
+      properties: {
+        timezone: { type: 'string', description: "IANA zone, e.g. 'Europe/Zagreb'." },
+        key_backed_up: { type: 'boolean', description: 'The user has copied the encryption key off this machine.' },
+      },
       additionalProperties: false,
     },
     handler: (args) => {
@@ -575,12 +586,17 @@ export default function register(registry) {
         assertTimeZone(args.timezone);
         state.update('settings', (cur) => ({ ...(cur ?? {}), timezone: args.timezone }));
       }
+      if (args.key_backed_up !== undefined) {
+        const ack = args.key_backed_up === true ? { fingerprint: keyFingerprint(), at: clock.now().toISOString() } : null;
+        state.update('settings', (cur) => ({ ...(cur ?? {}), key_backup: ack }));
+      }
       const tz = timeZone();
       const s = reminders();
       return {
         time_zone: tz,
         now: isoLocal(clock.now(), tz),
         encryption_key: loadKey().source === 'env' ? 'SHINOBI_REMEMBER_KEY' : loadKey().source,
+        key_backed_up: keyBackedUp(),
         memories: Object.keys(memories()).length,
         reminders_open: s.items.filter((r) => r.status === 'pending' || r.status === 'due').length,
       };
@@ -765,6 +781,20 @@ export default function register(registry) {
         ],
       },
     ];
+    if (mems.length && !keyBackedUp()) {
+      blocks.push({
+        type: 'text',
+        tone: 'warn',
+        text:
+          `Back up the encryption key. Without ${loadKey().source} every remembered value is lost, even from a database backup ` +
+          '(the key is not in the database). On the server: docker cp shinobi:/data/remember.key ./remember.key — ' +
+          'then put it in your password manager and delete the copy.',
+      });
+      blocks.push({
+        type: 'actions',
+        buttons: [{ label: "I've backed it up", tool: 'plugin_remember_settings', args: { key_backed_up: true }, variant: 'primary' }],
+      });
+    }
     if (!scheduling) {
       blocks.push({ type: 'text', tone: 'warn', text: 'This Shinobi is older than 0.7.0: reminders are stored but will not fire. Update Shinobi.' });
     }
