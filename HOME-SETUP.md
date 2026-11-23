@@ -13,6 +13,8 @@ the Claude app talks to from anywhere:
 - **Backups** of the brain to a private GitHub repo every night, with a phone
   alert when one fails.
 - Optional: **AdGuard Home** for ad and site blocking per device.
+- A **USB backup disk** with a nightly copy of Shinobi and the music, plus a
+  folder shared on the home network only.
 - **Remember plugin**: personal memory ("what's the Wi-Fi password?") and
   reminders that arrive as push notifications on the phone.
 
@@ -483,13 +485,133 @@ changes it). Details: [remember/README.md](remember/README.md).
 
 ---
 
+## 11. Backup disk on USB, shared on the home network
+
+A USB disk (here a 250 GB NTFS disk labelled `bekap250GBtoshiba`) holds:
+
+- `00_SHINOBI/`: a nightly archive of Shinobi (database snapshot, git copy,
+  `remember.key`, plugins, `compose.yaml`, `shinobi.env`; last 30 days) and a
+  copy of `~/Muzika`. **Not** shared on the network, because it contains secrets.
+- `01_BACKUP/`: your own files (ISOs, games, app backups). Shared as
+  `\\192.168.1.100\Backup`, home network only, with a password.
+
+The disk stays NTFS, so it still works in Windows. Nothing on it is formatted.
+
+**Before moving the disk from Windows to the laptop**, use **Eject** in
+Windows. A disk pulled out without it is left "unclean" and Linux will not
+mount it safely.
+
+### Mount it permanently
+
+Find the disk's UUID with `lsblk -f` (the `ntfs` line). Then (replace the UUID):
+
+```bash
+sudo cp /etc/fstab /etc/fstab.bak
+sudo mkdir -p /mnt/backup
+echo "UUID=28FE8896FE885E46 /mnt/backup ntfs-3g uid=$(id -u),gid=$(id -g),umask=0022,windows_names,nofail,x-systemd.device-timeout=10s 0 0" | sudo tee -a /etc/fstab
+sudo findmnt --verify                  # 0 errors; [W] lines about ntfs-3g are harmless
+sudo systemctl daemon-reload && sudo mount /mnt/backup
+df -h /mnt/backup
+```
+
+`nofail` lets the laptop boot normally when the disk is unplugged.
+`windows_names` keeps file names Windows can read.
+
+### Nightly copy at 04:00
+
+The script writes only inside `00_SHINOBI`. If the disk is missing or a step
+fails, it sends a push notification through Shinobi (step 10).
+
+```bash
+cat > ~/shinobi-server/backup-disk.sh <<'EOF'
+#!/bin/bash
+# Nightly copy of Shinobi + music to the USB disk. Writes only inside 00_SHINOBI.
+set -uo pipefail
+DEST=/mnt/backup/00_SHINOBI
+KEEP=30
+ENV="$HOME/shinobi-server/shinobi.env"
+
+alert() {
+  local token; token=$(grep '^SHINOBI_DASHBOARD_TOKEN=' "$ENV" | cut -d= -f2)
+  curl -s -o /dev/null http://127.0.0.1:8765/mcp \
+    -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"notify\",\"arguments\":{\"title\":\"Backup disk\",\"body\":\"$1\"}}}"
+  echo "$(date '+%F %T') FAILED: $1"
+  exit 1
+}
+
+mountpoint -q /mnt/backup || alert "USB disk is not connected - no backup tonight."
+mkdir -p "$DEST/Muzika" || alert "Cannot write to the USB disk."
+
+STAMP=$(date +%F)
+docker run --rm -v shinobi-data:/data:ro -v "$DEST":/out -v "$HOME/shinobi-server":/srv:ro \
+  --entrypoint tar shinobiapps/shinobi:latest \
+  czf "/out/shinobi-$STAMP.tar.gz" \
+  --exclude=./shinobi.db --exclude=./shinobi.db-wal --exclude=./shinobi.db-shm \
+  -C /data . -C /srv compose.yaml shinobi.env \
+  || alert "Shinobi archive failed."
+
+rsync -rt --modify-window=2 "$HOME/Muzika/" "$DEST/Muzika/" || alert "Music copy failed."
+
+ls -1t "$DEST"/shinobi-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f --
+echo "$(date '+%F %T') OK: $(du -h "$DEST/shinobi-$STAMP.tar.gz" | cut -f1)"
+EOF
+chmod +x ~/shinobi-server/backup-disk.sh
+~/shinobi-server/backup-disk.sh        # test run: prints "OK: <size>"
+( crontab -l 2>/dev/null | grep -v backup-disk.sh; echo '0 4 * * * $HOME/shinobi-server/backup-disk.sh >> $HOME/shinobi-server/backup-disk.log 2>&1' ) | crontab -
+```
+
+The live database is excluded on purpose. The archive carries the consistent
+snapshot from `sync/shinobi.db` that Shinobi writes at 03:17. Check the last
+runs with `tail -3 ~/shinobi-server/backup-disk.log`.
+
+### Share `01_BACKUP` on the home network
+
+Uses the Samba setup and password from step 7.
+
+```bash
+sudo cp /etc/samba/smb.conf /etc/samba/smb.conf.bak
+sudo tee -a /etc/samba/smb.conf <<'EOF'
+
+[Backup]
+   path = /mnt/backup/01_BACKUP
+   valid users = tomislav
+   read only = no
+   browseable = yes
+   hosts allow = 192.168.1. 127.0.0.1
+   hosts deny = ALL
+EOF
+testparm -s >/dev/null && echo "SAMBA CONFIG OK"
+sudo systemctl restart smbd
+```
+
+Windows: `\\192.168.1.100\Backup` → **Map network drive** → **Reconnect at
+sign-in**. Only addresses `192.168.1.x` are accepted, a password is required,
+and the router forwards nothing from the internet, so nobody outside the
+house can reach it.
+
+### Restore Shinobi from the disk
+
+```bash
+mkdir -p ~/restore && tar xzf /mnt/backup/00_SHINOBI/shinobi-YYYY-MM-DD.tar.gz -C ~/restore
+ls ~/restore    # sync/shinobi.db, remember.key, plugins/, compose.yaml, shinobi.env, ...
+```
+
+Copy `compose.yaml` and `shinobi.env` to `~/shinobi-server`, start Shinobi
+once (step 2), then copy `remember.key` and `plugins/` back with `docker cp`
+and restore the database with `sync pull` as in the
+[recovery runbook](https://github.com/numbererikson/shinobi/blob/main/docs/recovery-runbook.md).
+
+---
+
 ## Maintenance
 
 | Task | How |
 | --- | --- |
 | Update Shinobi | `cd ~/shinobi-server && docker compose pull && docker compose up -d` |
 | Update a plugin | Dashboard → **Plugins → Check for updates → Update → Restart now** |
-| Laptop reinstalled | steps 1–10 again, restore the brain from the backup (step 5 link), copy `remember.key.backup` back to `/data/remember.key`, and copy the music back |
+| Laptop reinstalled | steps 1–11 again; restore Shinobi, `remember.key`, plugins and music from the USB disk (step 11) or the brain from GitHub (step 5) |
 | Phone app asks for the token again | the sign-in lasts 30 days. Enter the token again on the sign-in page |
 | Something is off | `cd ~/shinobi-server && docker compose logs --tail 30 shinobi`, `journalctl --user -u mpd -n 20` |
 
