@@ -32,7 +32,9 @@ function host() {
   const pages = new Map();
   const schedules = new Map();
   const sent = [];
+  const briefs = new Map();
   const registry = {
+    brief: (def) => briefs.set(def.id, def),
     state: {
       get: (k) => (store.has(k) ? JSON.parse(store.get(k)) : null),
       set: (k, v) => store.set(k, JSON.stringify(v)),
@@ -54,7 +56,7 @@ function host() {
   register(registry);
   const call = (name, args = {}) => tools.get(name).handler(args);
   const tick = () => schedules.get('tick').run();
-  return { registry, store, tools, pages, schedules, sent, call, tick };
+  return { registry, store, tools, pages, schedules, briefs, sent, call, tick };
 }
 
 let now;
@@ -309,6 +311,20 @@ test('page nags about backing up the key until acknowledged for that key', () =>
   // A different key (e.g. recreated file) asks again.
   h.store.set('settings', JSON.stringify({ key_backup: { fingerprint: 'other', at: 'x' } }));
   assert.equal(nag(), true);
+});
+
+test('morning brief: overdue first, then today in local time, plus the key reminder', async () => {
+  const h = host();
+  const brief = () => h.briefs.get('today').render();
+  assert.deepEqual(brief(), ['🔔 Today: no reminders']);
+  h.call('plugin_remember_remind', { text: 'Banka', at: '2026-11-21 09:05' });
+  h.call('plugin_remember_remind', { text: 'Trening', at: '2026-11-21 17:00' });
+  h.call('plugin_remember_remind', { text: 'Sutra', at: '2026-11-22 09:00' });
+  at('2026-11-21T08:06:00Z'); // 09:06 Zagreb: Banka is now due
+  await h.tick();
+  assert.deepEqual(brief(), ['⏰ Overdue: Banka', '🔔 Today: 17:00 Trening']);
+  h.call('plugin_remember_save', { key: 'wifi', value: 'XY' });
+  assert.equal(brief().at(-1), '🔑 Remember: back up the encryption key');
 });
 
 test('works on a host without schedule/notify (memory only)', () => {

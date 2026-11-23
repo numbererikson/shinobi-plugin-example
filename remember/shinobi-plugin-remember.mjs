@@ -752,6 +752,32 @@ export default function register(registry) {
 
   // ---- dashboard page: sidebar → Remember (right after Music) ----
 
+  // Morning brief (Shinobi >= 0.10.0): what is due today, overdue ones first.
+  if (typeof registry.brief === 'function') {
+    registry.brief({
+      id: 'today',
+      order: 10,
+      render: () => {
+        const tz = timeZone();
+        const today = isoLocal(clock.now(), tz).slice(0, 10);
+        const s = reminders();
+        const overdue = s.items.filter((r) => r.status === 'due');
+        const todays = s.items
+          .filter((r) => r.status === 'pending' && isoLocal(new Date(r.due_at), tz).slice(0, 10) === today)
+          .sort((a, b) => a.due_at.localeCompare(b.due_at));
+        const lines = [];
+        if (overdue.length) lines.push(`⏰ Overdue: ${overdue.map((r) => r.text).join(', ')}`);
+        lines.push(
+          todays.length
+            ? `🔔 Today: ${todays.map((r) => `${isoLocal(new Date(r.due_at), tz).slice(11)} ${r.text}`).join(', ')}`
+            : '🔔 Today: no reminders',
+        );
+        if (Object.keys(memories()).length && !keyBackedUp()) lines.push('🔑 Remember: back up the encryption key');
+        return lines;
+      },
+    });
+  }
+
   if (typeof registry.registerPage === 'function') {
     registry.registerPage({
       id: 'remember',

@@ -685,6 +685,48 @@ export default function register(registry) {
     }),
   });
 
+  // ---- morning brief section (Shinobi >= 0.10.0) ----------------------------
+
+  if (typeof registry.brief === 'function') {
+    registry.brief({
+      id: 'network',
+      order: 30,
+      render: async () => {
+        try {
+          await runDue();
+        } catch {
+          /* reported below */
+        }
+        const a = api();
+        const tz = config().timeZone;
+        const clock = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+        let stats;
+        let status;
+        let clients;
+        try {
+          [stats, status, { clients }] = await Promise.all([a.get('/control/stats'), a.get('/control/status'), clientsData(a)]);
+        } catch {
+          return '🛡️ AdGuard: not reachable';
+        }
+        const lines = [];
+        if (status?.protection_enabled === false) lines.push('🛡️ AdGuard protection is OFF');
+        const total = stats?.num_dns_queries ?? 0;
+        const blocked = stats?.num_blocked_filtering ?? 0;
+        const top = (stats?.top_clients ?? []).flatMap((o) => Object.entries(o))[0];
+        const nameOf = (ip) => clients.find((c) => (c.ids ?? []).includes(ip))?.name ?? ip;
+        if (total) {
+          const pct = Math.round((blocked / total) * 100);
+          lines.push(`🛡️ Network: ${total} requests, ${pct}% blocked${top ? ` · busiest ${nameOf(top[0])}` : ''}`);
+        }
+        const temp = pending().slice().sort((x, y) => x.at - y.at).slice(0, 3);
+        for (const p of temp) {
+          lines.push(`⏳ ${p.client}: ${p.services.join(', ')} ${p.action === 'block' ? 'allowed' : 'blocked'} until ${clock(p.at)}`);
+        }
+        return lines;
+      },
+    });
+  }
+
   // ---- dashboard page (Shinobi >= 0.4.0): sidebar → Apps → AdGuard --------
 
   if (typeof registry.registerPage === 'function') {

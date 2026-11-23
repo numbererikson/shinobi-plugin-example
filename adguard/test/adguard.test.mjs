@@ -136,9 +136,13 @@ function loadTools({ state = memoryStore(), pages: withPages = true } = {}) {
     },
     state,
   };
-  if (withPages) registry.registerPage = (def) => pages.set(def.id, def);
+  const briefs = new Map();
+  if (withPages) {
+    registry.registerPage = (def) => pages.set(def.id, def);
+    registry.brief = (def) => briefs.set(def.id, def);
+  }
   register(registry);
-  return { names: [...tools.keys()], state, pages, call: (n, args = {}) => tools.get(n).handler(args) };
+  return { names: [...tools.keys()], state, pages, briefs, call: (n, args = {}) => tools.get(n).handler(args) };
 }
 
 const client = (name) => ag.clients.find((c) => c.name === name);
@@ -379,6 +383,14 @@ test('dashboard page shows groups, one-tap buttons on own tools, temporary chang
   const table = blocks.find((b) => b.type === 'table');
   assert.equal(table.rows.length, 2);
   assert.equal(table.rows.find((r) => r[0] === 'Android box')[4], 'never ⚠');
+});
+
+test('morning brief section: network numbers, busiest device and temporary changes', async () => {
+  const { call, briefs } = loadTools();
+  await call('plugin_adguard_services', { action: 'allow', target: 'Android box', services: ['youtube'], until: '19:00' });
+  const lines = await briefs.get('network').render();
+  assert.match(lines[0], /^🛡️ Network: 4 requests, \d+% blocked · busiest TV dnevna$/);
+  assert.equal(lines[1], '⏳ Android box: youtube allowed until 19:00');
 });
 
 test('hosts without registerPage still load every tool', () => {
