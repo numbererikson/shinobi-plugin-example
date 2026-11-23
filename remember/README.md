@@ -95,3 +95,11 @@ asks again.
 ```bash
 npm test
 ```
+
+## Morning brief
+
+On Shinobi 0.10.0 and newer, the server's daily morning brief includes a
+Remember section:
+- overdue reminders;
+- today's reminders, with times in the plugin time zone;
+- a nudge until the encryption key is backed up.

@@ -99,6 +99,16 @@ Then, in a new chat in the Claude app, start with "show me the devices on the
 network". Name the ones you care about and make a group ("put the kids' PC,
 PS5, TV and Android box into group djeca").
 
+## Morning brief
+
+On Shinobi 0.10.0 and newer, the server's daily morning brief includes a
+network section:
+- requests and the blocked share for the statistics period;
+- the busiest device;
+- a warning when protection is off;
+- temporary changes still running, e.g. "YouTube allowed until 19:00";
+- "AdGuard: not reachable" when it does not answer.
+
 ## Limits
 
 - Only devices whose DNS points at AdGuard are covered. A device that joins
