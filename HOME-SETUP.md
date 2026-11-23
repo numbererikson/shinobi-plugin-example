@@ -531,7 +531,14 @@ DEST=/mnt/backup/00_SHINOBI
 KEEP=30
 ENV="$HOME/shinobi-server/shinobi.env"
 
+# Result for Shinobi's system_status (morning brief): {"at","ok","message"}.
+status() {
+  printf '{"at":"%s","ok":%s,"message":"%s"}' "$(date -u +%FT%TZ)" "$1" "$2" \
+    | docker exec -i shinobi sh -c 'mkdir -p /data/status && cat > /data/status/disk-backup.json'
+}
+
 alert() {
+  status false "$1"
   local token; token=$(grep '^SHINOBI_DASHBOARD_TOKEN=' "$ENV" | cut -d= -f2)
   curl -s -o /dev/null http://127.0.0.1:8765/mcp \
     -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
@@ -555,7 +562,9 @@ docker run --rm -v shinobi-data:/data:ro -v "$DEST":/out -v "$HOME/shinobi-serve
 rsync -rt --modify-window=2 "$HOME/Muzika/" "$DEST/Muzika/" || alert "Music copy failed."
 
 ls -1t "$DEST"/shinobi-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f --
-echo "$(date '+%F %T') OK: $(du -h "$DEST/shinobi-$STAMP.tar.gz" | cut -f1)"
+SIZE=$(du -h "$DEST/shinobi-$STAMP.tar.gz" | cut -f1)
+status true "OK: Shinobi $SIZE, music copied"
+echo "$(date '+%F %T') OK: $SIZE"
 EOF
 chmod +x ~/shinobi-server/backup-disk.sh
 ~/shinobi-server/backup-disk.sh        # test run: prints "OK: <size>"
@@ -564,7 +573,9 @@ chmod +x ~/shinobi-server/backup-disk.sh
 
 The live database is excluded on purpose. The archive carries the consistent
 snapshot from `sync/shinobi.db` that Shinobi writes at 03:17. Check the last
-runs with `tail -3 ~/shinobi-server/backup-disk.log`.
+runs with `tail -3 ~/shinobi-server/backup-disk.log`. Each run also leaves its
+result in Shinobi (`system_status`, Shinobi 0.9.0+), so the morning brief
+reports it.
 
 ### Share `01_BACKUP` on the home network
 
