@@ -28,6 +28,7 @@ single ESM file with zero runtime dependencies.
 | `plugin_adguard_activity` | Most visited sites, blocked count and latest blocked requests for a device, group or everyone |
 | `plugin_adguard_stats` | House-wide totals, busiest devices by name, most blocked and visited domains |
 | `plugin_adguard_site` | Block or allow one website for everyone or a device/group; `remove` deletes that rule |
+| `plugin_adguard_rewrite` | Point a domain at another IPv4 address for everyone or a device/group, e.g. a Minecraft featured server at the home server for the PS5; `remove` deletes it |
 | `plugin_adguard_protection` | Pause filtering for N minutes, or turn it back on |
 
 Names and groups match regardless of case or diacritics ("djecji pc" finds

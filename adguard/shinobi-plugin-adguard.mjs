@@ -646,7 +646,8 @@ export default function register(registry) {
       const domain = normalizeDomain(args.domain);
       const status = (await a.get('/control/filtering/status')) ?? {};
       const rules = status.user_rules ?? [];
-      const mine = (r) => r.replace(/^@@/, '').startsWith(`||${domain}^`);
+      // Site rules only: DNS rewrites for the same domain belong to plugin_adguard_rewrite.
+      const mine = (r) => r.replace(/^@@/, '').startsWith(`||${domain}^`) && !r.includes('$dnsrewrite=');
       let kept = rules.filter((r) => !mine(r));
       let added = null;
       if (args.action !== 'remove') {
@@ -657,6 +658,50 @@ export default function register(registry) {
           suffix = `$client=${clientRuleModifier(target.clients.map((c) => c.name))}`;
         }
         added = `${args.action === 'allow' ? '@@' : ''}||${domain}^${suffix}`;
+        kept = [...kept, added];
+      }
+      await a.post('/control/filtering/set_rules', { rules: kept });
+      return { domain, action: args.action, rule: added, removed: rules.filter(mine) };
+    }),
+  });
+
+  registry.registerTool({
+    name: 'plugin_adguard_rewrite',
+    description:
+      'Point a domain (and its subdomains) at another IPv4 address for everyone or one device/group, e.g. make a Minecraft featured server ' +
+      'on the PS5 lead to the home server ("point lbsg.net at 192.168.1.100 for the PS5"). action "remove" deletes the rewrite. ' +
+      'Uses AdGuard custom filtering rules with $dnsrewrite; site block/allow rules for the domain are left alone.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string' },
+        to: { type: 'string', description: 'IPv4 address the domain should resolve to (required for add)' },
+        action: { type: 'string', enum: ['add', 'remove'] },
+        target: { type: 'string', description: 'Device or group; omit for everyone' },
+      },
+      required: ['domain', 'action'],
+      additionalProperties: false,
+    },
+    handler: withAdguard(async (args, a) => {
+      const domain = normalizeDomain(args.domain);
+      const status = (await a.get('/control/filtering/status')) ?? {};
+      const rules = status.user_rules ?? [];
+      const mine = (r) => r.startsWith(`||${domain}^$dnsrewrite=`);
+      let kept = rules.filter((r) => !mine(r));
+      let added = null;
+      if (args.action === 'add') {
+        const to = String(args.to ?? '').trim();
+        const octets = to.split('.');
+        if (octets.length !== 4 || !octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255)) {
+          throw new AdguardError(`"${args.to ?? ''}" is not an IPv4 address`);
+        }
+        let suffix = '';
+        if (args.target) {
+          const { clients } = await clientsData(a);
+          const target = resolveTarget(args.target, clients);
+          suffix = `,client=${clientRuleModifier(target.clients.map((c) => c.name))}`;
+        }
+        added = `||${domain}^$dnsrewrite=${to}${suffix}`;
         kept = [...kept, added];
       }
       await a.post('/control/filtering/set_rules', { rules: kept });

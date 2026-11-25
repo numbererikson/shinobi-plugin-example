@@ -149,13 +149,14 @@ const client = (name) => ag.clients.find((c) => c.name === name);
 
 // ---- Tests ------------------------------------------------------------------
 
-test('registers the nine adguard tools', () => {
+test('registers the ten adguard tools', () => {
   assert.deepEqual(loadTools().names.sort(), [
     'plugin_adguard_activity',
     'plugin_adguard_devices',
     'plugin_adguard_group',
     'plugin_adguard_name_device',
     'plugin_adguard_protection',
+    'plugin_adguard_rewrite',
     'plugin_adguard_schedule',
     'plugin_adguard_services',
     'plugin_adguard_site',
@@ -308,6 +309,20 @@ test('site rules for a device, for everyone, and removal keep other rules intact
   assert.deepEqual(res.removed, ['@@||roblox.com^']);
 });
 
+test('DNS rewrite for one device, kept apart from site rules, and removal', async () => {
+  const { call } = loadTools();
+  await call('plugin_adguard_site', { domain: 'lbsg.net', action: 'block' });
+  const res = await call('plugin_adguard_rewrite', { domain: 'lbsg.net', to: '192.168.1.100', action: 'add', target: 'TV dnevna' });
+  assert.equal(res.rule, "||lbsg.net^$dnsrewrite=192.168.1.100,client='TV dnevna'");
+  assert.deepEqual(ag.rules, ['||ads.example.org^', '||lbsg.net^', "||lbsg.net^$dnsrewrite=192.168.1.100,client='TV dnevna'"]);
+  // Changing the site rule leaves the rewrite alone, and vice versa.
+  await call('plugin_adguard_site', { domain: 'lbsg.net', action: 'remove' });
+  assert.deepEqual(ag.rules, ['||ads.example.org^', "||lbsg.net^$dnsrewrite=192.168.1.100,client='TV dnevna'"]);
+  await call('plugin_adguard_rewrite', { domain: 'lbsg.net', action: 'remove' });
+  assert.deepEqual(ag.rules, ['||ads.example.org^']);
+  await assert.rejects(call('plugin_adguard_rewrite', { domain: 'lbsg.net', to: '300.1.1.1', action: 'add' }), /not an IPv4 address/);
+});
+
 test('protection pause sends a duration in ms', async () => {
   const { call } = loadTools();
   const res = await call('plugin_adguard_protection', { enabled: false, minutes: 10 });
@@ -395,6 +410,6 @@ test('morning brief section: network numbers, busiest device and temporary chang
 
 test('hosts without registerPage still load every tool', () => {
   const { names, pages } = loadTools({ pages: false });
-  assert.equal(names.length, 9);
+  assert.equal(names.length, 10);
   assert.equal(pages.size, 0);
 });
