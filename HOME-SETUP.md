@@ -17,6 +17,7 @@ the Claude app talks to from anywhere:
   folder shared on the home network only.
 - **Remember plugin**: personal memory ("what's the Wi-Fi password?") and
   reminders that arrive as push notifications on the phone.
+- A **Minecraft server** for the kids, where Claude builds on request.
 
 Needs **Shinobi 0.8.0 or newer**. Every step after the Ubuntu install runs
 over SSH from another computer.
@@ -616,13 +617,123 @@ and restore the database with `sync pull` as in the
 
 ---
 
+## 12. Minecraft server for the kids, and the builder
+
+A Bedrock server on the laptop that the PS5 (or a tablet) joins. Claude can
+build in it on request: "build Jurassic Park next to Luka", or a photo of a
+cathedral.
+
+### The server
+
+```bash
+mkdir -p ~/minecraft && cd ~/minecraft
+cat > compose.yaml <<'YAML'
+services:
+  minecraft:
+    image: itzg/minecraft-bedrock-server
+    container_name: minecraft
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      EULA: "TRUE"
+      SERVER_NAME: "Svijet od Luke"
+      GAMEMODE: creative      # unlimited blocks, flying
+      FORCE_GAMEMODE: "true"  # also for players who joined earlier in survival
+      DIFFICULTY: easy
+      ALLOW_CHEATS: "true"    # building by commands needs it
+    volumes:
+      - ./data:/data
+YAML
+docker compose up -d
+```
+
+Allow only your kids' Xbox accounts:
+
+```bash
+docker exec minecraft send-command "allowlist add Lukakrizan"
+docker exec minecraft send-command "allowlist on"
+docker exec minecraft send-command "op Lukakrizan"   # his own commands: /time set day, /weather clear, /tp …
+```
+
+Add-ons bought on the Marketplace don't load on a dedicated server: they are
+encrypted and only work in the player's own worlds and in Realms. Free
+add-ons (e.g. from CurseForge) can be installed in `~/minecraft/data`.
+
+The current console edition has no LAN tab. To get the PS5 to the laptop,
+point one of the featured servers at it only for the PS5, with an AdGuard
+rewrite (the AdGuard plugin's `plugin_adguard_rewrite`). Then joining that
+server from the PS5 opens your world.
+
+### The builder (Minecraft plugin)
+
+Shinobi talks to the server through `mc-bridge`, a small sidecar that holds
+the Docker socket and accepts only building and chat commands (see the
+[plugin README](minecraft/README.md)). It has no open port. Only Shinobi's
+Docker network reaches it.
+
+```bash
+cd ~/minecraft
+curl -fsSLo bridge.mjs https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/minecraft/bridge/bridge.mjs
+T=$(openssl rand -hex 24)
+(umask 077; grep -v '^BRIDGE_TOKEN=' .env 2>/dev/null > .env.new; echo "BRIDGE_TOKEN=$T" >> .env.new; mv .env.new .env)
+cd ~/shinobi-server
+sed -i '/^SHINOBI_MC_BRIDGE_/d' shinobi.env
+printf 'SHINOBI_MC_BRIDGE_URL=http://mc-bridge:8790\nSHINOBI_MC_BRIDGE_TOKEN=%s\n' "$T" >> shinobi.env
+unset T
+```
+
+Add the bridge to `~/minecraft/compose.yaml`, under `services:`, and the
+network at the end:
+
+```yaml
+  mc-bridge:
+    image: node:22-alpine
+    container_name: mc-bridge
+    restart: unless-stopped
+    command: ["node", "/app/bridge.mjs"]
+    environment:
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./bridge.mjs:/app/bridge.mjs:ro
+    networks: [shinobi]
+
+networks:
+  shinobi:
+    external: true
+    name: shinobi-server_default
+```
+
+```bash
+cd ~/minecraft && docker compose up -d
+cd ~/shinobi-server && docker compose up -d     # picks up the new shinobi.env
+docker logs mc-bridge                            # "mc-bridge listening on :8790"
+```
+
+Then install **Minecraft** from **Plugins → Catalog** and press **Restart now**.
+
+### Everyday phrases
+
+With a kid in the world:
+- "who is on Minecraft?"
+- "build a pyramid next to Luka"
+- "build Osijek cathedral" plus a photo
+- "add a moat around build 3"
+- "remove build 2"
+- "tell the kids dinner is ready"
+
+The build appears block by block. The chat says "Majstor: … je gotov!" and
+your phone gets a push.
+
+---
+
 ## Maintenance
 
 | Task | How |
 | --- | --- |
 | Update Shinobi | `cd ~/shinobi-server && docker compose pull && docker compose up -d` |
 | Update a plugin | Dashboard → **Plugins → Check for updates → Update → Restart now** |
-| Laptop reinstalled | steps 1–11 again; restore Shinobi, `remember.key`, plugins and music from the USB disk (step 11) or the brain from GitHub (step 5) |
+| Laptop reinstalled | steps 1–12 again; restore Shinobi, `remember.key`, plugins and music from the USB disk (step 11) or the brain from GitHub (step 5) |
 | Phone app asks for the token again | the sign-in lasts 30 days. Enter the token again on the sign-in page |
 | Something is off | `cd ~/shinobi-server && docker compose logs --tail 30 shinobi`, `journalctl --user -u mpd -n 20` |
 
