@@ -503,17 +503,4 @@ export default function register(registry) {
       },
     });
   }
-
-  // ---- morning brief ----
-  if (typeof registry.brief === 'function') {
-    registry.brief({
-      id: 'builds',
-      order: 40,
-      render: () => {
-        const since = clock.now().getTime() - 24 * 3600 * 1000;
-        const recent = builds().filter((b) => b.status === 'done' && Date.parse(b.finished_at ?? '') >= since && !b.name.startsWith('remove #'));
-        return recent.length ? `⛏️ Minecraft: built ${recent.map((b) => b.name).join(', ')}` : null;
-      },
-    });
-  }
 }

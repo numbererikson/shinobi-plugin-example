@@ -637,7 +637,8 @@ services:
     environment:
       EULA: "TRUE"
       SERVER_NAME: "Svijet od Luke"
-      GAMEMODE: survival
+      GAMEMODE: creative      # unlimited blocks, flying
+      FORCE_GAMEMODE: "true"  # also for players who joined earlier in survival
       DIFFICULTY: easy
       ALLOW_CHEATS: "true"    # building by commands needs it
     volumes:
@@ -651,7 +652,12 @@ Allow only your kids' Xbox accounts:
 ```bash
 docker exec minecraft send-command "allowlist add Lukakrizan"
 docker exec minecraft send-command "allowlist on"
+docker exec minecraft send-command "op Lukakrizan"   # his own commands: /time set day, /weather clear, /tp …
 ```
+
+Add-ons bought on the Marketplace don't load on a dedicated server: they are
+encrypted and only work in the player's own worlds and in Realms. Free
+add-ons (e.g. from CurseForge) can be installed in `~/minecraft/data`.
 
 The current console edition has no LAN tab. To get the PS5 to the laptop,
 point one of the featured servers at it only for the PS5, with an AdGuard

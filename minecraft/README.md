@@ -16,7 +16,7 @@ kids see it go up on the console. When it's done, the server chat says
 | `plugin_minecraft_say` | Send a chat message ("Večera je gotova!"). |
 
 There is also a **Minecraft** dashboard page (who is online, builds, a chat
-box) and a morning-brief line for yesterday's builds.
+box).
 
 ## How it reaches the server
 

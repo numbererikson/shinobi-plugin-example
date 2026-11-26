@@ -191,7 +191,6 @@ function memoryStore() {
 function load(state = memoryStore()) {
   const tools = new Map();
   const pages = new Map();
-  const briefs = new Map();
   const notes = [];
   register({
     registerTool(def) {
@@ -199,11 +198,10 @@ function load(state = memoryStore()) {
       tools.set(def.name, def);
     },
     registerPage: (def) => pages.set(def.id, def),
-    brief: (def) => briefs.set(def.id, def),
     notify: async (n) => notes.push(n),
     state,
   });
-  return { tools, pages, briefs, notes, call: (n, args = {}) => tools.get(n).handler(args) };
+  return { tools, pages, notes, call: (n, args = {}) => tools.get(n).handler(args) };
 }
 
 async function waitFor(fn) {
@@ -216,10 +214,9 @@ async function waitFor(fn) {
 }
 
 test('registers the tools', () => {
-  const { tools, pages, briefs } = load();
+  const { tools, pages } = load();
   assert.deepEqual([...tools.keys()].sort(), ['plugin_minecraft_build', 'plugin_minecraft_builds', 'plugin_minecraft_players', 'plugin_minecraft_remove', 'plugin_minecraft_say']);
   assert.ok(pages.has('minecraft'));
-  assert.ok(briefs.has('builds'));
 });
 
 test('players and say go through the bridge', async () => {
