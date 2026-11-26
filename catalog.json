@@ -23,6 +23,12 @@
       "name": "Fitness",
       "description": "A 180-day training mission: today's workout, pain-aware restrictions, weight and habit streaks.",
       "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs"
+    },
+    {
+      "id": "minecraft",
+      "name": "Minecraft",
+      "description": "Claude builds in your home Bedrock world from a description or a photo; chat with the players. Needs the mc-bridge sidecar.",
+      "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/minecraft/shinobi-plugin-minecraft.mjs"
     }
   ]
 }

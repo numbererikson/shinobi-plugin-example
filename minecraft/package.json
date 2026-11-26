@@ -1,0 +1,30 @@
+{
+  "name": "shinobi-plugin-minecraft",
+  "version": "0.1.0",
+  "description": "Shinobi plugin — Claude builds in your home Minecraft (Bedrock) world from a description or a photo. Single file, zero runtime dependencies, plus a tiny whitelisting bridge sidecar.",
+  "type": "module",
+  "main": "./shinobi-plugin-minecraft.mjs",
+  "exports": {
+    ".": "./shinobi-plugin-minecraft.mjs"
+  },
+  "files": [
+    "shinobi-plugin-minecraft.mjs",
+    "bridge/bridge.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/minecraft.test.mjs"
+  },
+  "keywords": ["shinobi", "shinobi-plugin", "mcp", "minecraft", "bedrock"],
+  "author": "Tomislav Krizan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/numbererikson/shinobi-plugin-example.git",
+    "directory": "minecraft"
+  },
+  "homepage": "https://github.com/numbererikson/shinobi-plugin-example/tree/main/minecraft#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}
