@@ -1,0 +1,20 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Majstor",
+    "description": "/gradi <what> asks Shinobi's Majstor to build it next to you.",
+    "uuid": "f5bc630c-eb57-4189-a836-6ad7a3f76c47",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 80]
+  },
+  "modules": [
+    {
+      "type": "script",
+      "language": "javascript",
+      "entry": "scripts/main.js",
+      "uuid": "82788087-9d81-4ff8-856a-ecb352c6d1a3",
+      "version": [1, 0, 0]
+    }
+  ],
+  "dependencies": [{ "module_name": "@minecraft/server", "version": "2.0.0" }]
+}

@@ -14,9 +14,28 @@ kids see it go up on the console. When it's done, the server chat says
 | `plugin_minecraft_builds` | Recent builds and their status. |
 | `plugin_minecraft_remove` | Tear an earlier build down (fills its box with air). |
 | `plugin_minecraft_say` | Send a chat message ("Večera je gotova!"). |
+| `plugin_minecraft_wishes` | What the kids asked for in the game. Claude designs the ones Majstor didn't know (`for_wish`). |
 
-There is also a **Minecraft** dashboard page (who is online, builds, a chat
-box).
+There is also a **Minecraft** dashboard page: who is online, builds, open
+wishes and a chat box.
+
+## Kids ask from inside the game
+
+With the [Majstor behavior pack](pack/) on the server, a player types
+**`/gradi dvorac`** (or `/majstor:gradi dvorac`). Nobody needs to be at the
+keyboard:
+- **Ready-made designs:** kuća, dvorac, toranj, piramida, svjetionik, bazen
+  (Croatian or English words).
+- **Everything Claude built before**, by name: after "Osječka katedrala", `/gradi katedrala` works.
+- **`/gradi popis`** lists what Majstor knows.
+- **Anything else:** Majstor answers "još ne znam…" and keeps the wish. The
+  next time you talk to Claude, it sees the wish (`plugin_minecraft_wishes`),
+  designs it next to that kid, and from then on it is known.
+
+Wish builds don't send you a push. Each player can start one build every 30 s.
+
+The pack only prints the wish to the server console. The plugin reads the
+console through mc-bridge every few seconds.
 
 ## How it reaches the server
 

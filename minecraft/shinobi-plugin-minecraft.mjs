@@ -18,11 +18,25 @@ const MIN_Y = -30;
 const MAX_Y = 220;
 const BATCH = 40;
 const BUILDS_KEY = 'builds';
+const DESIGNS_KEY = 'designs';
+const WISHES_KEY = 'wishes';
+const KEEP_DESIGNS = 100;
+const KEEP_WISHES = 50;
+const WISH_POLL_MS = 4000;
+const WISH_COOLDOWN_MS = 30_000;
 const KEEP_BUILDS = 50;
 const BLOCK = /^(minecraft:)?[a-z][a-z0-9_]{1,63}$/;
 const PLAYER = /^[A-Za-z0-9_ ]{1,32}$/;
 
-export const clock = { now: () => new Date(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+export const clock = {
+  now: () => new Date(),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  every: (ms, fn) => {
+    const t = setInterval(fn, ms);
+    t.unref?.();
+    return t;
+  },
+};
 
 // ---- geometry ---------------------------------------------------------------
 
@@ -261,6 +275,117 @@ export function makeBridge(config, fetchImpl = globalThis.fetch) {
   };
 }
 
+// ---- ready-made designs and wishes from the game ------------------------------
+
+/** Built-in designs a kid can ask for without anyone at the keyboard. */
+export const TEMPLATES = [
+  {
+    name: 'kuća',
+    words: ['kuca', 'kucica', 'house', 'home'],
+    parts: [
+      { type: 'box', from: [-4, 0, 6], to: [4, 5, 14], block: 'brick_block', hollow: true },
+      { type: 'clear', from: [0, 1, 6], to: [0, 2, 6] },
+      { type: 'box', from: [-3, 2, 6], to: [-2, 3, 6], block: 'glass' },
+      { type: 'box', from: [2, 2, 6], to: [3, 3, 6], block: 'glass' },
+      { type: 'roof', from: [-5, 6, 5], to: [5, 6, 15], axis: 'z', block: 'deepslate_tiles' },
+    ],
+  },
+  {
+    name: 'dvorac',
+    words: ['dvorac', 'zamak', 'castle', 'tvrdava'],
+    parts: [
+      { type: 'box', from: [-12, 0, 8], to: [12, 8, 32], block: 'smooth_stone', hollow: true, open_top: true },
+      { type: 'cylinder', center: [-12, 0, 8], radius: 3, height: 14, block: 'cobblestone', hollow: true },
+      { type: 'cylinder', center: [12, 0, 8], radius: 3, height: 14, block: 'cobblestone', hollow: true },
+      { type: 'cylinder', center: [-12, 0, 32], radius: 3, height: 14, block: 'cobblestone', hollow: true },
+      { type: 'cylinder', center: [12, 0, 32], radius: 3, height: 14, block: 'cobblestone', hollow: true },
+      { type: 'pyramid', center: [-12, 14, 8], size: 7, block: 'red_concrete' },
+      { type: 'pyramid', center: [12, 14, 8], size: 7, block: 'red_concrete' },
+      { type: 'pyramid', center: [-12, 14, 32], size: 7, block: 'red_concrete' },
+      { type: 'pyramid', center: [12, 14, 32], size: 7, block: 'red_concrete' },
+      { type: 'clear', from: [-2, 1, 8], to: [2, 5, 8] },
+    ],
+  },
+  {
+    name: 'toranj',
+    words: ['toranj', 'kula', 'tower'],
+    parts: [
+      { type: 'cylinder', center: [0, 0, 10], radius: 4, height: 24, block: 'smooth_stone', hollow: true },
+      { type: 'pyramid', center: [0, 24, 10], size: 9, block: 'deepslate_tiles' },
+      { type: 'clear', from: [0, 1, 6], to: [0, 3, 6] },
+    ],
+  },
+  {
+    name: 'piramida',
+    words: ['piramida', 'pyramid', 'egipat'],
+    parts: [{ type: 'pyramid', center: [0, 0, 22], size: 31, block: 'sandstone' }],
+  },
+  {
+    name: 'svjetionik',
+    words: ['svjetionik', 'lighthouse', 'svjetiljka'],
+    parts: [
+      { type: 'cylinder', center: [0, 0, 10], radius: 3, height: 20, block: 'white_concrete' },
+      { type: 'cylinder', center: [0, 6, 10], radius: 3, height: 3, block: 'red_concrete' },
+      { type: 'cylinder', center: [0, 14, 10], radius: 3, height: 3, block: 'red_concrete' },
+      { type: 'cylinder', center: [0, 20, 10], radius: 3, height: 3, block: 'glass' },
+      { type: 'block', at: [0, 21, 10], block: 'sea_lantern' },
+      { type: 'dome', center: [0, 23, 10], radius: 3, block: 'red_concrete' },
+    ],
+  },
+  {
+    name: 'bazen',
+    words: ['bazen', 'pool', 'kupanje'],
+    parts: [
+      { type: 'box', from: [-6, -4, 6], to: [6, 0, 18], block: 'quartz_block' },
+      { type: 'box', from: [-5, -3, 7], to: [5, 0, 17], block: 'water' },
+    ],
+  },
+];
+
+const fold = (s) => String(s).normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/g, 'd').toLowerCase();
+const words = (s) => fold(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
+/** Same word, or the same stem with a short ending (katedralu ~ katedrala, kuću ~ kuća). */
+function sameWord(a, b) {
+  if (a === b) return true;
+  const k = Math.min(5, Math.min(a.length, b.length) - 1);
+  return k >= 3 && a.slice(0, k) === b.slice(0, k) && Math.abs(a.length - b.length) <= 3;
+}
+
+/**
+ * What a wish asks for: a ready-made template, or a design Claude built
+ * earlier (newest first). null when nothing fits.
+ */
+export function findDesign(text, designs = []) {
+  const want = words(text);
+  if (want.length === 0) return null;
+  for (const t of TEMPLATES) if (want.some((w) => t.words.some((tw) => sameWord(w, tw)))) return { name: t.name, parts: t.parts, clear_first: true };
+  for (const d of designs) {
+    const have = words(d.name);
+    if (want.some((w) => w.length >= 4 && have.some((h) => sameWord(w, h)))) return d;
+  }
+  return null;
+}
+
+/** Wish lines the Majstor behavior pack prints to the server console. */
+export function parseWishLines(lines) {
+  const out = [];
+  for (const line of lines) {
+    const i = line.indexOf('MAJSTOR_WISH ');
+    if (i < 0) continue;
+    try {
+      const w = JSON.parse(line.slice(i + 13).trim());
+      if (w && typeof w.id === 'string' && typeof w.player === 'string' && typeof w.text === 'string') {
+        out.push({ id: w.id.slice(0, 40), player: w.player.slice(0, 32), text: w.text.replace(/[\r\n]+/g, ' ').trim().slice(0, 60) });
+      }
+    } catch {
+      /* not ours */
+    }
+  }
+  return out;
+}
+
+const HELP_WORDS = new Set(['popis', 'lista', 'help', 'pomoc', 'sto']);
+
 // ---- plugin -----------------------------------------------------------------
 
 export default function register(registry) {
@@ -273,6 +398,11 @@ export default function register(registry) {
       return [b, ...rest].sort((x, y) => y.id - x.id).slice(0, KEEP_BUILDS);
     });
   const nextId = () => (builds()[0]?.id ?? 0) + 1;
+  const designs = () => (store ? store.get(DESIGNS_KEY) ?? [] : []);
+  const saveDesign = (d) =>
+    store?.update(DESIGNS_KEY, (list) => [d, ...(list ?? []).filter((x) => fold(x.name) !== fold(d.name))].slice(0, KEEP_DESIGNS));
+  const wishes = () => (store ? store.get(WISHES_KEY) ?? [] : []);
+  const saveWish = (w) => store?.update(WISHES_KEY, (list) => [w, ...(list ?? []).filter((x) => x.id !== w.id)].slice(0, KEEP_WISHES));
 
   // A restart drops the in-memory queue: whatever was still pending is lost.
   if (store && builds().some((b) => b.status === 'queued' || b.status === 'running')) {
@@ -317,11 +447,14 @@ export default function register(registry) {
       await b.run([`tickingarea remove ${area}`, `say Majstor: ${record.name} je gotov!`]);
       const done = { ...record, status: 'done', finished_at: clock.now().toISOString() };
       saveBuild(done);
-      if (typeof registry.notify === 'function') {
+      if (job.design) saveDesign({ name: record.name, parts: job.design.parts, clear_first: job.design.clear_first === true });
+      if (job.wish) saveWish({ ...job.wish, status: 'built', build_id: record.id });
+      if (!job.wish && typeof registry.notify === 'function') {
         await registry.notify({ title: 'Majstor je gotov', body: `${record.name} (${record.blocks} blocks) stoji pored igrača ${record.player}.` }).catch(() => undefined);
       }
     } catch (err) {
       saveBuild({ ...record, status: 'failed', finished_at: clock.now().toISOString(), error: String(err.message ?? err).slice(0, 300) });
+      if (job.wish) saveWish({ ...job.wish, status: 'failed', build_id: record.id });
       await b.run([`tickingarea remove ${area}`]).catch(() => undefined);
     }
   }
@@ -369,7 +502,8 @@ export default function register(registry) {
       'BLOCKS are Bedrock ids, e.g. brick_block, stone_bricks, smooth_stone, sandstone, quartz_block, glass, oak_planks, deepslate_tiles, ' +
       'white_concrete / red_concrete / blue_concrete / lime_concrete (any colour), gold_block, iron_block, sea_lantern, glowstone, water, air.\n' +
       'Set clear_first:true to clear trees/terrain inside the bounding box first. Aim for recognisable shape and colours over tiny detail; ' +
-      'a cathedral is ~40–120 parts. To add to an earlier build, pass extend_build (its id) — coordinates are then relative to that build\'s anchor.',
+      'a cathedral is ~40–120 parts. To add to an earlier build, pass extend_build (its id) — coordinates are then relative to that build\'s anchor. ' +
+      'Every new build is remembered by name, so the kids can ask for it again in the game ("/gradi katedrala").',
     inputSchema: {
       type: 'object',
       properties: {
@@ -378,6 +512,7 @@ export default function register(registry) {
         extend_build: { type: 'integer', description: 'Add to an earlier build (uses its anchor)' },
         clear_first: { type: 'boolean', default: false },
         parts: { type: 'array', items: { type: 'object' }, minItems: 1 },
+        for_wish: { type: 'string', description: 'Id of a kid\'s wish this build fulfils (from plugin_minecraft_wishes); build next to that player' },
       },
       required: ['name', 'parts'],
       additionalProperties: false,
@@ -404,6 +539,9 @@ export default function register(registry) {
         existingAnchor = true;
       } else {
         const online = await players();
+        const wished = args.for_wish !== undefined ? wishes().find((w) => w.id === String(args.for_wish)) : undefined;
+        if (args.for_wish !== undefined && !wished) throw new Error(`no wish ${args.for_wish}`);
+        if (wished && !args.player) args = { ...args, player: wished.player };
         if (args.player) {
           player = online.find((p) => p.toLowerCase() === String(args.player).toLowerCase());
           if (!player) throw new Error(`${args.player} is not online (online: ${online.join(', ') || 'nobody'})`);
@@ -428,7 +566,8 @@ export default function register(registry) {
         extends: existingAnchor ? Number(args.extend_build) : null,
       };
       saveBuild(record);
-      enqueue({ record, plan, tag, existingAnchor });
+      const wish = args.for_wish !== undefined ? wishes().find((w) => w.id === String(args.for_wish)) : undefined;
+      enqueue({ record, plan, tag, existingAnchor, design: existingAnchor ? null : { parts: args.parts, clear_first: args.clear_first === true }, wish });
       const seconds = Math.ceil(plan.fills.length * 0.08) + 5;
       return { build_id: id, status: 'queued', player, blocks: plan.blocks, commands: plan.fills.length, bbox: plan.bbox, estimated_seconds: seconds };
     },
@@ -464,6 +603,73 @@ export default function register(registry) {
     },
   });
 
+  // ---- wishes typed in the game (Majstor behavior pack) ----
+  const lastWish = new Map();
+  const seenWishes = new Set();
+  let wishSince = Math.floor(clock.now().getTime() / 1000);
+
+  async function handleWish(w) {
+    if (seenWishes.has(w.id)) return;
+    seenWishes.add(w.id);
+    if (seenWishes.size > 500) seenWishes.delete(seenWishes.values().next().value);
+    if (!PLAYER.test(w.player)) return;
+    const b = bridge();
+    const now = clock.now().getTime();
+    if (HELP_WORDS.has(fold(w.text))) {
+      const names = [...TEMPLATES.map((t) => t.name), ...designs().slice(0, 10).map((d) => d.name)];
+      await b.run([`say Majstor: mogu sagraditi: ${names.join(', ')}`.slice(0, 380)]);
+      return;
+    }
+    if (now - (lastWish.get(w.player) ?? 0) < WISH_COOLDOWN_MS) {
+      await b.run([`say Majstor: ${w.player}, polako, još gradim prethodno!`]);
+      return;
+    }
+    lastWish.set(w.player, now);
+    const wish = { ...w, at: clock.now().toISOString(), status: 'new' };
+    const design = findDesign(w.text, designs());
+    if (!design) {
+      saveWish({ ...wish, status: 'unknown' });
+      await b.run([`say Majstor: još ne znam sagraditi "${w.text}". Zapamtio sam želju! Napiši /gradi popis za ono što znam.`]);
+      return;
+    }
+    const plan = planBuild(design.parts, { clearFirst: design.clear_first === true });
+    const id = nextId();
+    const tag = `Majstor_${id}`;
+    const record = { id, name: design.name, player: w.player, tag, status: 'queued', created_at: wish.at, commands: plan.fills.length, blocks: plan.blocks, bbox: plan.bbox, extends: null, wish: w.text };
+    saveBuild(record);
+    saveWish({ ...wish, status: 'building', build_id: id });
+    enqueue({ record, plan, tag, existingAnchor: false, wish: { ...wish, build_id: id } });
+  }
+
+  async function pollWishes() {
+    if (!bridgeConfigFromEnv().token || !store) return;
+    const since = wishSince;
+    wishSince = Math.floor(clock.now().getTime() / 1000) - 1;
+    const lines = (await bridge().logs(since)).lines ?? [];
+    for (const w of parseWishLines(lines)) await handleWish(w).catch(() => undefined);
+  }
+
+  let polling = false;
+  clock.every(WISH_POLL_MS, () => {
+    if (polling) return;
+    polling = true;
+    return pollWishes()
+      .catch(() => undefined)
+      .finally(() => {
+        polling = false;
+      });
+  });
+
+  registry.registerTool({
+    name: 'plugin_minecraft_wishes',
+    description:
+      'What the kids asked Majstor for in the game ("/gradi dvorac"). Wishes it could build by itself are marked built; ' +
+      '"unknown" ones need you: design them with plugin_minecraft_build and pass for_wish (the wish id) so it goes up next to that kid ' +
+      'and is remembered for next time.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: () => ({ wishes: wishes(), templates: TEMPLATES.map((t) => t.name), designs: designs().map((d) => d.name) }),
+  });
+
   // ---- dashboard page ----
   if (typeof registry.registerPage === 'function') {
     registry.registerPage({
@@ -492,6 +698,11 @@ export default function register(registry) {
         });
         if (error) blocks.push({ type: 'text', tone: 'error', text: error });
         blocks.push({ type: 'input', label: 'Message to the players', placeholder: 'Večera je gotova!', button: 'Send', tool: 'plugin_minecraft_say', arg: 'text', maxLength: 200 });
+        const open = wishes().filter((w) => w.status === 'unknown').slice(0, 10);
+        if (open.length) {
+          blocks.push({ type: 'heading', text: 'Wishes Majstor could not build yet' });
+          blocks.push({ type: 'list', items: open.map((w) => ({ title: w.text, subtitle: `${w.player} · ${String(w.at).slice(0, 16).replace('T', ' ')}`, badge: 'ask Claude' })) });
+        }
         blocks.push({ type: 'heading', text: 'Builds' });
         blocks.push({
           type: 'table',
