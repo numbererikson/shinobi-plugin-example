@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import register, { clock, expandPart, planBuild, splitFill, fillCommand, parsePlayerList, bridgeConfigFromEnv } from '../shinobi-plugin-minecraft.mjs';
+import register, { clock, findDesign, parseWishLines, TEMPLATES, expandPart, planBuild, splitFill, fillCommand, parsePlayerList, bridgeConfigFromEnv } from '../shinobi-plugin-minecraft.mjs';
 import { createBridge, isAllowedCommand, demuxLogs } from '../bridge/bridge.mjs';
 
 const TOKEN = 'test-token-0123456789';
@@ -159,8 +159,12 @@ function fakeDocker() {
   }
 }
 
+let tick = null;
 before(async () => {
   clock.sleep = () => new Promise((r) => setImmediate(r));
+  clock.every = (_ms, fn) => {
+    tick = fn;
+  };
 });
 
 beforeEach(async () => {
@@ -215,7 +219,7 @@ async function waitFor(fn) {
 
 test('registers the tools', () => {
   const { tools, pages } = load();
-  assert.deepEqual([...tools.keys()].sort(), ['plugin_minecraft_build', 'plugin_minecraft_builds', 'plugin_minecraft_players', 'plugin_minecraft_remove', 'plugin_minecraft_say']);
+  assert.deepEqual([...tools.keys()].sort(), ['plugin_minecraft_build', 'plugin_minecraft_builds', 'plugin_minecraft_players', 'plugin_minecraft_remove', 'plugin_minecraft_say', 'plugin_minecraft_wishes']);
   assert.ok(pages.has('minecraft'));
 });
 
@@ -295,4 +299,74 @@ test('builds cut off by a restart are marked failed', async () => {
   assert.equal(builds[0].status, 'failed');
   assert.match(builds[0].error, /restart/);
   assert.equal(builds[1].status, 'done');
+});
+
+// ---- wishes from the game -------------------------------------------------------
+
+test('findDesign: templates by Croatian or English word, then earlier designs', () => {
+  assert.equal(findDesign('dvorac')?.name, 'dvorac');
+  assert.equal(findDesign('veliki CASTLE')?.name, 'dvorac');
+  assert.equal(findDesign('kuću')?.name, 'kuća');
+  const designs = [{ name: 'Osječka katedrala', parts: [{ type: 'block', at: [0, 0, 6], block: 'stone' }] }];
+  assert.equal(findDesign('katedralu', designs)?.name, 'Osječka katedrala');
+  assert.equal(findDesign('vulkan', designs), null);
+  assert.equal(findDesign('', designs), null);
+  for (const t of TEMPLATES) assert.ok(planBuild(t.parts, { clearFirst: true }).fills.length > 0, t.name);
+});
+
+test('parseWishLines reads only well-formed Majstor lines', () => {
+  const lines = [
+    '[2026-11-26 10:00:00:000 WARN] [Scripting] MAJSTOR_WISH {"id":"5-1","player":"Lukakrizan","text":"dvorac"}',
+    '[Scripting] MAJSTOR_WISH not json',
+    'Player connected: Lukakrizan',
+  ];
+  assert.deepEqual(parseWishLines(lines), [{ id: '5-1', player: 'Lukakrizan', text: 'dvorac' }]);
+});
+
+const wishLine = (id, text, player = 'Lukakrizan') => `[Scripting] MAJSTOR_WISH ${JSON.stringify({ id, player, text })}`;
+
+test('a wish in the game builds a template next to that kid, without a push', async () => {
+  const { call, notes } = load();
+  mc.state.logs.push(wishLine('1-1', 'dvorac'));
+  await tick();
+  const done = await waitFor(async () => (await call('plugin_minecraft_builds')).builds.find((b) => b.status === 'done'));
+  assert.equal(done.name, 'dvorac');
+  assert.equal(done.player, 'Lukakrizan');
+  assert.ok(mc.state.ran.includes('execute at Lukakrizan run summon armor_stand Majstor_1 ~ ~ ~'));
+  assert.equal(notes.length, 0);
+  const { wishes } = await call('plugin_minecraft_wishes');
+  assert.equal(wishes[0].status, 'built');
+  // the same console line seen again is not built twice
+  await tick();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await call('plugin_minecraft_builds')).builds.length, 1);
+});
+
+test('unknown wishes are kept for Claude, then built with for_wish and remembered', async () => {
+  const { call } = load();
+  mc.state.logs.push(wishLine('2-1', 'vulkan'));
+  await tick();
+  await waitFor(async () => (await call('plugin_minecraft_wishes')).wishes.find((w) => w.status === 'unknown'));
+  assert.match(mc.state.ran.at(-1), /ne znam sagraditi "vulkan"/);
+  const res = await call('plugin_minecraft_build', { name: 'Vulkan', for_wish: '2-1', parts: [{ type: 'pyramid', center: [0, 0, 20], size: 15, block: 'stone' }] });
+  assert.equal(res.player, 'Lukakrizan');
+  await waitFor(async () => (await call('plugin_minecraft_wishes')).wishes.find((w) => w.id === '2-1' && w.status === 'built'));
+  assert.deepEqual((await call('plugin_minecraft_wishes')).designs, ['Vulkan']);
+  // next time the kid asks, Majstor builds it alone
+  mc.state.logs.push(wishLine('3-1', 'vulkan', 'Mia'));
+  await tick();
+  const again = await waitFor(async () => (await call('plugin_minecraft_builds')).builds.find((b) => b.player === 'Mia' && b.status === 'done'));
+  assert.equal(again.name, 'Vulkan');
+});
+
+test('help lists what Majstor can build; spamming is slowed down', async () => {
+  const { call } = load();
+  mc.state.logs.push(wishLine('4-1', 'popis'));
+  await tick();
+  assert.match(mc.state.ran.at(-1), /^say Majstor: mogu sagraditi: kuća, dvorac/);
+  mc.state.logs.push(wishLine('4-2', 'toranj'), wishLine('4-3', 'piramida'));
+  await tick();
+  await waitFor(async () => (await call('plugin_minecraft_builds')).builds.find((b) => b.status === 'done'));
+  assert.ok(mc.state.ran.some((c) => c.includes('polako')));
+  assert.equal((await call('plugin_minecraft_builds')).builds.length, 1);
 });

@@ -712,6 +712,33 @@ docker logs mc-bridge                            # "mc-bridge listening on :8790
 
 Then install **Minecraft** from **Plugins → Catalog** and press **Restart now**.
 
+### Let the kids ask from inside the game
+
+The Majstor behavior pack adds the in-game command `/gradi`. Install it once:
+
+```bash
+cd ~/minecraft
+W="data/worlds/$(sudo ls data/worlds | head -1)"
+base=https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/minecraft/pack
+sudo mkdir -p data/behavior_packs/majstor/scripts
+sudo curl -fsSLo data/behavior_packs/majstor/manifest.json "$base/manifest.json"
+sudo curl -fsSLo data/behavior_packs/majstor/scripts/main.js "$base/scripts/main.js"
+sudo python3 - "$W/world_behavior_packs.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+packs = json.load(open(p)) if os.path.exists(p) else []
+if not any(x.get("pack_id") == "f5bc630c-eb57-4189-a836-6ad7a3f76c47" for x in packs):
+    packs.append({"pack_id": "f5bc630c-eb57-4189-a836-6ad7a3f76c47", "version": [1, 0, 0]})
+json.dump(packs, open(p, "w"), indent=2)
+PY
+docker compose restart minecraft
+```
+
+In the game:
+- `/gradi dvorac` builds a castle next to whoever typed it.
+- `/gradi popis` lists what Majstor knows.
+- Unknown wishes wait for Claude ("what did the kids wish for?").
+
 ### Everyday phrases
 
 With a kid in the world:
@@ -721,6 +748,7 @@ With a kid in the world:
 - "add a moat around build 3"
 - "remove build 2"
 - "tell the kids dinner is ready"
+- "what did the kids wish for in Minecraft?"
 
 The build appears block by block. The chat says "Majstor: … je gotov!" and
 your phone gets a push.
