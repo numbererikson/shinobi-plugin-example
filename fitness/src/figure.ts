@@ -100,8 +100,6 @@ const STEPS = 8;
 
 const COLOR = {
   body: '#4fd8ff',
-  far: '#2b8cff',
-  head: '#0a1428',
   prop: '#2b5799',
   propFill: '#0d1a33',
   arrow: '#ffcf5c',
@@ -247,80 +245,242 @@ const fmt = (n: number): string => (Math.round(n * 10) / 10).toString();
 const pt = (v: Vec): string => `${fmt(v[0])},${fmt(v[1])}`;
 const pts = (vs: Vec[]): string => vs.map(pt).join(' ');
 
+// ---- drawing ----------------------------------------------------------------
+//
+// Style: a "System window" panel (dark spotlight + hologram grid), the body
+// drawn as thick outlined limbs with a vertical cyan gradient, a lit head, a
+// floor shadow, a faint ghost of the end position and an amber arrow showing
+// where the movement goes. Every limb is defined once in <defs> (with its
+// animation) and drawn twice through <use>: dark outline, then colour.
+
+const INK = '#020814';
+const WIDTH = { near: 8, far: 7, torso: 13, neck: 6, outline: 4 };
+
 function propSvg(p: Prop): string {
+  const metal = `stroke="url(#metal)" stroke-linecap="round"`;
   switch (p.kind) {
     case 'floor':
-      return `<line x1="4" y1="${GROUND + 3}" x2="${SIZE - 4}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="3"/>`;
-    case 'bar':
-      return `<line x1="${p.x1 ?? 30}" y1="${p.y}" x2="${p.x2 ?? 170}" y2="${p.y}" stroke="${COLOR.prop}" stroke-width="5" stroke-linecap="round"/>`;
-    case 'dipBars':
-      return `<line x1="${p.x1}" y1="${p.y}" x2="${p.x2}" y2="${p.y}" stroke="${COLOR.prop}" stroke-width="6" stroke-linecap="round"/>` +
-        `<line x1="${(p.x1 + p.x2) / 2}" y1="${p.y}" x2="${(p.x1 + p.x2) / 2}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="3" opacity="0.6"/>`;
-    case 'box':
-      return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="3" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="3"/>`;
-    case 'wall':
-      return `<line x1="${p.x}" y1="8" x2="${p.x}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="4"/>`;
-    case 'pad':
-      return `<line x1="${p.x}" y1="${p.y1}" x2="${p.x}" y2="${p.y2}" stroke="${COLOR.prop}" stroke-width="7" stroke-linecap="round"/>`;
-    case 'arrow': {
-      const [x1, y1] = p.from;
-      const [x2, y2] = p.to;
-      const a = Math.atan2(y2 - y1, x2 - x1);
-      const h1: Vec = [x2 - 6 * Math.cos(a - 0.5), y2 - 6 * Math.sin(a - 0.5)];
-      const h2: Vec = [x2 - 6 * Math.cos(a + 0.5), y2 - 6 * Math.sin(a + 0.5)];
-      return `<polyline points="${pts([p.from, p.to])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2" stroke-dasharray="3 3"/>` +
-        `<polyline points="${pts([h1, p.to, h2])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2"/>`;
+      return `<line x1="6" y1="${GROUND + 4}" x2="${SIZE - 6}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="3" stroke-linecap="round"/>` +
+        `<line x1="6" y1="${GROUND + 4}" x2="${SIZE - 6}" y2="${GROUND + 4}" stroke="${COLOR.body}" stroke-width="1" opacity="0.5"/>`;
+    case 'bar': {
+      const x1 = p.x1 ?? 30;
+      const x2 = p.x2 ?? 170;
+      return `<line x1="${x1}" y1="${p.y}" x2="${x1}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="4" opacity="0.55"/>` +
+        `<line x1="${x2}" y1="${p.y}" x2="${x2}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="4" opacity="0.55"/>` +
+        `<line x1="${x1 - 4}" y1="${p.y}" x2="${x2 + 4}" y2="${p.y}" ${metal} stroke-width="6"/>`;
     }
+    case 'dipBars': {
+      const mid = (p.x1 + p.x2) / 2;
+      return `<line x1="${mid}" y1="${p.y}" x2="${mid}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="5" opacity="0.55"/>` +
+        `<line x1="${p.x1}" y1="${p.y}" x2="${p.x2}" y2="${p.y}" ${metal} stroke-width="7"/>`;
+    }
+    case 'box':
+      return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="4" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="3"/>` +
+        `<line x1="${p.x + 4}" y1="${p.y + 2}" x2="${p.x + p.w - 4}" y2="${p.y + 2}" stroke="${COLOR.body}" stroke-width="1.5" opacity="0.5"/>`;
+    case 'wall':
+      return `<rect x="${p.x - 3}" y="6" width="6" height="${GROUND - 2}" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="2"/>`;
+    case 'pad':
+      return `<line x1="${p.x}" y1="${p.y1}" x2="${p.x}" y2="${p.y2}" stroke="${COLOR.prop}" stroke-width="9" stroke-linecap="round"/>`;
+    case 'arrow':
+      return arrow(p.from, p.to, 0);
   }
 }
 
-/** An animated polyline (or a static one when there is a single frame). */
-function animatedLine(list: Frame[], dur: number, pick: (j: Joints) => Vec[], attrs: string): string {
-  const values = list.map((f) => pts(pick(f.joints)));
-  const first = values[0]!;
-  if (list.length < 2) return `<polyline points="${first}" ${attrs}/>`;
-  const keyTimes = list.map((f) => Math.min(f.at / dur, 1).toFixed(4)).join(';');
-  return `<polyline points="${first}" ${attrs}><animate attributeName="points" dur="${fmt(dur)}s" repeatCount="indefinite" values="${values.join(';')}" keyTimes="${keyTimes}"/></polyline>`;
+/** Amber dashed arrow from a to b, bowed sideways by `bow` px. */
+function arrow(a: Vec, b: Vec, bow: number): string {
+  const d = sub(b, a);
+  const l = len(d) || 1;
+  const n: Vec = [-d[1] / l, d[0] / l];
+  const c = add(scale(add(a, b), 0.5), scale(n, bow));
+  // Arrowhead along the curve's end tangent (control point → end).
+  const t = sub(b, c);
+  const tl = len(t) || 1;
+  const u: Vec = [t[0] / tl, t[1] / tl];
+  const side: Vec = [-u[1], u[0]];
+  const h1 = add(sub(b, scale(u, 7)), scale(side, 4));
+  const h2 = add(sub(b, scale(u, 7)), scale(side, -4));
+  return `<path d="M${pt(a)} Q${pt(c)} ${pt(b)}" fill="none" stroke="${COLOR.arrow}" stroke-width="2.5" stroke-dasharray="4 3" stroke-linecap="round" opacity="0.9"/>` +
+    `<polyline points="${pts([h1, b, h2])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 
-function animatedHead(list: Frame[], dur: number): string {
-  const head = list[0]!.joints.head;
-  const base = `cx="${fmt(head[0])}" cy="${fmt(head[1])}" r="${SEG.head}" fill="${COLOR.head}" stroke="${COLOR.body}" stroke-width="4"`;
-  if (list.length < 2) return `<circle ${base}/>`;
-  const keyTimes = list.map((f) => (Math.min(f.at / dur, 1)).toFixed(4)).join(';');
-  const cx = list.map((f) => fmt(f.joints.head[0])).join(';');
-  const cy = list.map((f) => fmt(f.joints.head[1])).join(';');
-  return `<circle ${base}><animate attributeName="cx" dur="${fmt(dur)}s" repeatCount="indefinite" values="${cx}" keyTimes="${keyTimes}"/><animate attributeName="cy" dur="${fmt(dur)}s" repeatCount="indefinite" values="${cy}" keyTimes="${keyTimes}"/></circle>`;
+const keyTimesOf = (list: Frame[], dur: number): string => list.map((f) => Math.min(f.at / dur, 1).toFixed(4)).join(';');
+
+/** A limb path defined once (with its animation), to be drawn via <use>. */
+function limbDef(id: string, list: Frame[], dur: number, pick: (j: Joints) => Vec[]): string {
+  const values = list.map((f) => pts(pick(f.joints)));
+  if (list.length < 2) return `<polyline id="${id}" points="${values[0]}"/>`;
+  return `<polyline id="${id}" points="${values[0]}"><animate attributeName="points" dur="${fmt(dur)}s" repeatCount="indefinite" values="${values.join(';')}" keyTimes="${keyTimesOf(list, dur)}"/></polyline>`;
+}
+
+/** Outline + colour pass for a defined limb. */
+function limbUse(id: string, width: number, paint: string, opacity = 1): string {
+  const common = `fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+  return `<g opacity="${opacity}"><use href="#${id}" ${common} stroke="${INK}" stroke-width="${width + WIDTH.outline}"/>` +
+    `<use href="#${id}" ${common} stroke="${paint}" stroke-width="${width}"/></g>`;
+}
+
+function animatedAttr(list: Frame[], dur: number, attr: string, value: (j: Joints) => number): string {
+  if (list.length < 2) return '';
+  return `<animate attributeName="${attr}" dur="${fmt(dur)}s" repeatCount="indefinite" values="${list.map((f) => fmt(value(f.joints))).join(';')}" keyTimes="${keyTimesOf(list, dur)}"/>`;
+}
+
+const MOVING: Joint[] = ['hip', 'shoulder', 'head', 'handN', 'ankleN', 'kneeN', 'elbowN'];
+
+/** The key pose furthest from the first one: the end of the movement. */
+function endPose(spec: FigureSpec): Joints | null {
+  if (spec.keys.length < 2) return null;
+  const view = spec.view ?? 'side';
+  const start = solve(spec.keys[0]!.pose, view);
+  let best: Joints | null = null;
+  let bestD = 0;
+  for (const k of spec.keys.slice(1)) {
+    const j = solve(k.pose, view);
+    const d = MOVING.reduce((s, m) => s + len(sub(j[m], start[m])), 0);
+    if (d > bestD) {
+      bestD = d;
+      best = j;
+    }
+  }
+  return best;
 }
 
 /** Render a figure spec as a standalone animated SVG document. */
 export function renderFigure(spec: FigureSpec, title: string): string {
   const { list, duration } = frames(spec);
   const front = spec.view === 'front';
-  const limb = `fill="none" stroke-linecap="round" stroke-linejoin="round"`;
-  const nearAttrs = `${limb} stroke="${COLOR.body}" stroke-width="5"`;
-  const farAttrs = front ? nearAttrs : `${limb} stroke="${COLOR.far}" stroke-width="5" opacity="0.55"`;
+  const start = list[0]!.joints;
+  const end = endPose(spec);
 
-  const far = [
-    animatedLine(list, duration, (j) => [j.hipF, j.kneeF, j.ankleF, j.toeF], farAttrs),
-    animatedLine(list, duration, (j) => [j.shoulderF, j.elbowF, j.handF], farAttrs),
-  ];
-  const torso = front
-    ? animatedLine(list, duration, (j) => [j.shoulderF, j.shoulderN, j.shoulder, j.hip, j.hipF, j.hipN], `${limb} stroke="${COLOR.body}" stroke-width="6"`)
-    : animatedLine(list, duration, (j) => [j.hip, j.shoulder], `${limb} stroke="${COLOR.body}" stroke-width="7"`);
-  const near = [
-    animatedLine(list, duration, (j) => [j.hipN, j.kneeN, j.ankleN, j.toeN], nearAttrs),
-    animatedLine(list, duration, (j) => [j.shoulderN, j.elbowN, j.handN], nearAttrs),
-  ];
-  const neck = animatedLine(list, duration, (j) => [j.shoulder, j.head], `${limb} stroke="${COLOR.body}" stroke-width="5"`);
+  const chains: Record<string, (j: Joints) => Vec[]> = {
+    legF: (j) => [j.hipF, j.kneeF, j.ankleF, j.toeF],
+    armF: (j) => [j.shoulderF, j.elbowF, j.handF],
+    torso: front ? (j) => [j.shoulderF, j.shoulderN, j.shoulder, j.hip, j.hipF, j.hipN] : (j) => [j.hip, j.shoulder],
+    neck: (j) => [j.shoulder, j.head],
+    legN: (j) => [j.hipN, j.kneeN, j.ankleN, j.toeN],
+    armN: (j) => [j.shoulderN, j.elbowN, j.handN],
+  };
+  const defs = Object.entries(chains).map(([id, pick]) => limbDef(id, list, duration, pick)).join('');
 
+  // Ghost: the end of the movement, faint and static.
+  let ghost = '';
+  if (end) {
+    const g = (vs: Vec[], w: number): string => `<polyline points="${pts(vs)}" fill="none" stroke="${COLOR.body}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    ghost = `<g opacity="0.14">${Object.entries(chains).map(([id, pick]) => g(pick(end), id === 'torso' ? WIDTH.torso : WIDTH.near)).join('')}` +
+      `<circle cx="${fmt(end.head[0])}" cy="${fmt(end.head[1])}" r="${SEG.head + 1}" fill="${COLOR.body}"/></g>`;
+  }
+
+  // Direction arrow: the joint that travels furthest, from start to end, bowed outwards.
+  let motion = '';
+  const motionYs: number[] = [];
+  if (end && !spec.props.some((p) => p.kind === 'arrow')) {
+    // Follow the body (hip/shoulder/head) unless a limb clearly moves more (leg raise, Y raise).
+    const disp = (j: Joint): number => len(sub(end[j], start[j]));
+    const pickMax = (js: Joint[]): Joint => js.reduce((a, b) => (disp(b) > disp(a) ? b : a));
+    const body = pickMax(['hip', 'shoulder', 'head']);
+    const limb = pickMax(['handN', 'ankleN']);
+    const m = disp(limb) > 1.6 * disp(body) ? limb : body;
+    let a = start[m];
+    let b = end[m];
+    if (len(sub(b, a)) > 10) {
+      // At least 26 px long, beside the body (away from its centre), inside the frame.
+      const mid = scale(add(a, b), 0.5);
+      const d = sub(b, a);
+      const u: Vec = scale(d, 1 / len(d));
+      const half = Math.max(len(d), 26) / 2;
+      a = sub(mid, scale(u, half));
+      b = add(mid, scale(u, half));
+      let n: Vec = [-u[1], u[0]];
+      const centre = scale(add(start.hip, start.shoulder), 0.5);
+      if (n[0] * (mid[0] - centre[0]) + n[1] * (mid[1] - centre[1]) < 0) n = scale(n, -1);
+      const off = scale(n, 22);
+      const clamp = (v: Vec): Vec => [Math.min(Math.max(v[0], 10), SIZE - 10), Math.min(Math.max(v[1], 10), GROUND - 4)];
+      const p0 = clamp(add(a, off));
+      const p1 = clamp(add(b, off));
+      motionYs.push(p0[1], p1[1]);
+      motion = arrow(p0, p1, 0);
+    }
+  }
+
+  const hasFloor = spec.props.some((p) => p.kind === 'floor');
+  const shadow = hasFloor
+    ? `<ellipse cx="${fmt(start.hip[0])}" cy="${GROUND + 5}" rx="30" ry="4" fill="#000" opacity="0.45">${animatedAttr(list, duration, 'cx', (j) => j.hip[0])}</ellipse>`
+    : '';
+
+  const headDef = `cx="${fmt(start.head[0])}" cy="${fmt(start.head[1])}" r="${SEG.head + 1}"`;
+  const head =
+    `<circle ${headDef} fill="url(#head)" stroke="${INK}" stroke-width="2.5">` +
+    animatedAttr(list, duration, 'cx', (j) => j.head[0]) +
+    animatedAttr(list, duration, 'cy', (j) => j.head[1]) +
+    `</circle>`;
+
+  const farOpacity = front ? 1 : 0.6;
+  const farPaint = front ? 'url(#body)' : 'url(#bodyFar)';
+  // Frame the picture around what moves: floor exercises become a wide, short
+  // panel instead of a square that is two-thirds empty.
+  const [vx, vy, vw, vh] = frameBox(spec, list, motionYs);
+  const panel = `x="${vx}" y="${vy}" width="${vw}" height="${vh}"`;
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}" role="img" aria-label="${escapeAttr(title)}">` +
-    `<defs><filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vx} ${vy} ${vw} ${vh}" width="${vw}" height="${vh}" role="img" aria-label="${escapeAttr(title)}">` +
+    `<defs>` +
+    `<radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="#0f2547"/><stop offset="1" stop-color="#040a17"/></radialGradient>` +
+    `<pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#1d3b6b" stroke-width="0.6" opacity="0.55"/></pattern>` +
+    `<linearGradient id="body" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${SIZE}"><stop offset="0" stop-color="#9ff0ff"/><stop offset="0.5" stop-color="#4fd8ff"/><stop offset="1" stop-color="#1f8fe0"/></linearGradient>` +
+    `<linearGradient id="bodyFar" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${SIZE}"><stop offset="0" stop-color="#4fa8ff"/><stop offset="1" stop-color="#1d5fb8"/></linearGradient>` +
+    `<linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${SIZE}" y2="0"><stop offset="0" stop-color="#3d6db0"/><stop offset="0.5" stop-color="#9cc8ff"/><stop offset="1" stop-color="#3d6db0"/></linearGradient>` +
+    `<radialGradient id="head" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#dffaff"/><stop offset="0.45" stop-color="#4fd8ff"/><stop offset="1" stop-color="#1667c4"/></radialGradient>` +
+    `<filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` +
+    defs +
+    `</defs>` +
+    `<rect ${panel} rx="10" fill="url(#bg)"/>` +
+    `<rect ${panel} rx="10" fill="url(#grid)"/>` +
+    `<rect x="${vx + 1}" y="${vy + 1}" width="${vw - 2}" height="${vh - 2}" rx="10" fill="none" stroke="${COLOR.body}" stroke-width="1" opacity="0.35"/>` +
+    shadow +
     `<g>${spec.props.map(propSvg).join('')}</g>` +
-    `<g filter="url(#glow)">${far.join('')}${torso}${neck}${animatedHead(list, duration)}${near.join('')}</g>` +
+    ghost +
+    `<g filter="url(#glow)">` +
+    limbUse('legF', WIDTH.far, farPaint, farOpacity) +
+    limbUse('armF', WIDTH.far, farPaint, farOpacity) +
+    limbUse('torso', WIDTH.torso, 'url(#body)') +
+    limbUse('neck', WIDTH.neck, 'url(#body)') +
+    head +
+    limbUse('legN', WIDTH.near, 'url(#body)') +
+    limbUse('armN', WIDTH.near, 'url(#body)') +
+    `</g>` +
+    motion +
     `</svg>`
   );
+}
+
+/** Bounding box of everything drawn (all frames + props), padded, inside the 200×200 stage. */
+function frameBox(spec: FigureSpec, list: Frame[], extraYs: number[]): [number, number, number, number] {
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  const grow = (y: number): void => {
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+  };
+  for (const y of extraYs) grow(y);
+  for (const f of list) for (const v of Object.values(f.joints) as Vec[]) grow(v[1]);
+  for (const f of list) grow(f.joints.head[1] - SEG.head - 2);
+  for (const p of spec.props) {
+    if (p.kind === 'floor') grow(GROUND + 6);
+    else if (p.kind === 'bar' || p.kind === 'dipBars') grow(p.y - 4);
+    else if (p.kind === 'box') { grow(p.y); grow(p.y + p.h); }
+    else if (p.kind === 'pad') { grow(p.y1); grow(p.y2); }
+    else if (p.kind === 'arrow') { grow(p.from[1]); grow(p.to[1]); }
+    else if (p.kind === 'wall') grow(GROUND);
+  }
+  // Pad, keep at least half the stage tall so arrows and props fit, stay inside the stage.
+  const pad = 16;
+  let top = Math.max(0, Math.floor(y0 - pad));
+  let bottom = Math.min(SIZE, Math.ceil(y1 + pad));
+  const minH = SIZE / 2;
+  if (bottom - top < minH) {
+    const extra = minH - (bottom - top);
+    top = Math.max(0, top - extra);
+    bottom = Math.min(SIZE, top + minH);
+  }
+  return [0, top, SIZE, bottom - top];
 }
 
 function escapeAttr(s: string): string {

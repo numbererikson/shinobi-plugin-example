@@ -1,27 +1,40 @@
-// Dashboard page (sidebar → Apps → The System): data blocks only, drawn by
-// the host. Needs Shinobi 0.13+ for figures, forms and the hologram theme;
-// older hosts drop those blocks and show the rest.
+// Dashboard page (sidebar → Apps → The System). Data blocks only, drawn by
+// the host (Shinobi 0.13+ for figures, forms and the hologram theme).
+//
+// Layout, top to bottom:
+//   1. Today — START screen, the current step of a running quest, the rest
+//      countdown, or the QUEST COMPLETE screen.
+//   2. Status Window.
+//   3. Your Path — this week, every skill ladder with its unlock progress,
+//      the next rank checklist and the next Gate.
+//   4. Skill Codex — every exercise with its animation.
+//   5. History, then the profile and pain forms.
 
-import { AREAS, exercise, LADDERS, TRACKED_LADDERS } from './exercises.js';
+import { AREAS, EXERCISES, exercise, LADDERS, type Exercise } from './exercises.js';
 import { renderFigure } from './figure.js';
+import { activeToday, restLeft } from './session.js';
 import {
   addDays,
   daysBetween,
   formatDays,
   hunterLevel,
-  nextRankNeeds,
+  ladderProgress,
   questFor,
+  rankChecklist,
   stats,
   streak,
-  TEST_EXERCISE,
   TEST_LABEL,
+  weekPlan,
   xpForLevel,
-  type QuestItem,
 } from './rules.js';
-import { GATE_TESTS, type HunterState } from './types.js';
 import { T } from './text.js';
+import { GATE_TESTS, type ActiveSession, type HunterState, type SessionStep } from './types.js';
 
 type Block = Record<string, unknown>;
+export interface PageRender {
+  blocks: Block[];
+  refreshSeconds?: number;
+}
 
 const figureCache = new Map<string, string>();
 export function figureSvg(id: string): string {
@@ -34,165 +47,326 @@ export function figureSvg(id: string): string {
   return svg;
 }
 
-const unit = (q: { kind: 'reps' | 'hold' }): string => (q.kind === 'hold' ? 's' : 'reps');
-const range = (q: QuestItem): string => `${q.sets} × ${q.min === q.max ? q.min : `${q.min}–${q.max}`} ${unit(q)}${q.perSide ? ' / side' : ''}`;
+const unitOf = (ex: Exercise): string => (ex.kind === 'hold' ? 's' : 'reps');
+const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const dayName = (date: string): string => DAY[new Date(`${date}T12:00:00Z`).getUTCDay()]!;
+const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+const questTitle = (type: string, session?: string): string =>
+  type === 'gate' ? 'Gate' : type === 'training' ? `Training ${session ?? ''}`.trim() : 'Recovery';
 
-function exerciseBlocks(q: QuestItem, opts: { log: boolean; warmup?: boolean }): Block[] {
-  const ex = exercise(q.exercise);
-  const level = q.level ? ` · Lv ${q.level.at}/${q.level.of}` : '';
-  const caption = [
-    `Today: ${q.target.join(' · ')} ${unit(q)}${q.perSide ? ' per side' : ''}${q.restSec ? ` — rest ${q.restSec} s between sets` : ''}`,
-    q.note ? `⚠ ${q.note}` : '',
-    q.logged ? `✓ Logged: ${q.logged.join(' · ')}` : '',
-  ].filter(Boolean).join('\n');
+function figure(ex: Exercise, opts: { title?: string; caption?: string; size?: 'md' | 'lg'; collapsed?: boolean }): Block {
+  const b: Block = {
+    type: 'figure',
+    svg: figureSvg(ex.id),
+    alt: `${ex.name} — animated demonstration`,
+    bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
+    size: opts.size ?? 'md',
+  };
+  if (opts.title) b.title = opts.title;
+  if (opts.caption) b.caption = opts.caption;
+  if (opts.collapsed && opts.title) b.collapsed = true;
+  return b;
+}
+
+export function renderPage(state: HunterState | null, today: string, now: Date, defaultTimezone: string): PageRender {
+  if (!state) return { blocks: awakening(defaultTimezone) };
+  const active = activeToday(state, today);
+  const running = active && !active.finished ? active : null;
+
+  const blocks: Block[] = [];
+  let refreshSeconds: number | undefined;
+  if (running) {
+    const r = runningBlocks(running, now);
+    blocks.push(...r.blocks);
+    refreshSeconds = r.refreshSeconds;
+  } else if (active?.finished) {
+    blocks.push(...completeBlocks(state, active, today));
+  } else {
+    blocks.push(...startBlocks(state, today));
+  }
+
+  // While a quest runs the page stays focused on it (and refreshes during rest).
+  if (running) return refreshSeconds ? { blocks, refreshSeconds } : { blocks };
+
+  blocks.push({ type: 'divider' }, ...statusBlocks(state, today));
+  blocks.push({ type: 'divider' }, ...pathBlocks(state, today));
+  blocks.push({ type: 'divider' }, ...codexBlocks(state));
+  blocks.push({ type: 'divider' }, ...historyBlocks(state, today));
+  blocks.push({ type: 'divider' }, { type: 'heading', text: 'Profile' }, profileForm(state), painForm());
+  return { blocks };
+}
+
+// ---- 1. Today ------------------------------------------------------------------
+
+function startBlocks(state: HunterState, today: string): Block[] {
+  const q = questFor(state, today);
+  const title = `Daily Quest — ${dayName(today)} · ${questTitle(q.type, q.session)}`;
+  if (q.done) {
+    const next = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
+    return [
+      { type: 'heading', text: title },
+      { type: 'text', tone: 'ok', text: `${T.questDone}\nTomorrow: ${next?.label ?? 'Recovery'}.` },
+    ];
+  }
+  const items = q.type === 'gate'
+    ? q.gateTests.map((t) => ({ title: TEST_LABEL[t], subtitle: 'one all-out set', badge: 'trial' }))
+    : q.main.map((m) => ({
+        title: m.name,
+        subtitle: `${m.sets} × ${m.target.join('·')} ${m.kind === 'hold' ? 's' : 'reps'}${m.perSide ? ' per side' : ''}${m.note ? ` — ${m.note}` : ''}`,
+        badge: m.level ? `Lv ${m.level.at}/${m.level.of}` : '',
+        tone: m.note ? 'warn' : 'default',
+      }));
+  const minutes = q.type === 'recovery' ? 10 : q.type === 'gate' ? 25 : 10 + q.main.reduce((s, m) => s + Math.round((m.sets * (m.restSec + 40)) / 60), 0);
   const blocks: Block[] = [
-    {
-      type: 'figure',
-      svg: figureSvg(ex.id),
-      alt: `${ex.name} — animated demonstration`,
-      title: `${opts.warmup ? 'Warm-up · ' : ''}${ex.name} · ${range(q)}${level}${q.logged ? ' ✓' : ''}`,
-      caption,
-      bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
-      size: 'md',
-      collapsed: true,
-    },
+    { type: 'heading', text: title },
+    { type: 'text', text: q.type === 'gate' ? T.gateIntro : q.type === 'training' ? T.trainingIntro : T.recoveryIntro },
   ];
-  if (opts.log) {
+  if (q.deload && q.type === 'training') blocks.push({ type: 'text', tone: 'warn', text: T.deload });
+  blocks.push({
+    type: 'stats',
+    items: [
+      { label: 'Quest', value: questTitle(q.type, q.session) },
+      { label: q.type === 'gate' ? 'Trials' : 'Exercises', value: String(items.length), hint: q.warmup.length ? `+ ${q.warmup.length} warm-up` : undefined },
+      { label: 'Time', value: `~${minutes} min` },
+      { label: 'Reward', value: `+${q.type === 'gate' ? 300 : q.type === 'training' ? 100 : 30} XP`, tone: 'ok' },
+    ],
+  });
+  blocks.push({ type: 'list', items });
+  if (q.type === 'gate') {
+    const left = GATE_TESTS.filter((t) => !q.gateTests.includes(t));
+    if (left.length) blocks.push({ type: 'text', tone: 'warn', text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, '')).join(', ')}. They join a later Gate.` });
+  }
+  if (q.skipped.length) {
+    blocks.push({ type: 'list', items: q.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} rests today`, subtitle: x.reason, tone: 'warn' })) });
+  }
+  blocks.push({ type: 'actions', buttons: [{ label: q.type === 'gate' ? '▶  ENTER THE GATE' : '▶  START QUEST', tool: 'plugin_fitness_start', variant: 'primary' }] });
+  return blocks;
+}
+
+function stepLabel(s: SessionStep): string {
+  return s.kind === 'warmup' ? 'Warm-up' : s.kind === 'trial' ? 'Gate trial' : s.kind === 'recovery' ? 'Mobility' : 'Exercise';
+}
+
+function runningBlocks(a: ActiveSession, now: Date): PageRender {
+  const step = a.steps[a.cursor]!;
+  const ex = exercise(step.exercise);
+  const totalSets = a.steps.reduce((n, s) => n + s.sets, 0);
+  const doneSets = a.steps.reduce((n, s) => n + (s.skipped ? s.sets : s.done.length), 0);
+  const blocks: Block[] = [
+    { type: 'heading', text: `${questTitle(a.type, a.session)} — step ${a.cursor + 1} of ${a.steps.length}` },
+    { type: 'progress', label: `${doneSets} of ${totalSets} sets`, value: doneSets, max: totalSets },
+  ];
+  const rest = restLeft(a, now);
+  const setNo = step.done.length + 1;
+  const target = step.target[step.done.length] ?? step.target[step.target.length - 1];
+  const perSide = ex.perSide ? ' per side' : '';
+
+  if (rest > 0) {
     blocks.push({
-      type: 'form',
-      tool: 'plugin_fitness_log',
-      button: q.logged ? 'Log again' : `Log ${ex.name}`,
-      args: { exercise: ex.id },
-      fields: q.target.map((t, i) => ({
-        name: `set${i + 1}`,
-        label: `Set ${i + 1}`,
+      type: 'stats',
+      items: [
+        { label: 'Rest', value: mmss(rest), tone: 'ok', hint: 'breathe, shake it out' },
+        { label: 'Next', value: `${ex.name}`, hint: `set ${setNo} of ${step.sets}${target !== undefined ? ` · ${target} ${unitOf(ex)}${perSide}` : ''}` },
+      ],
+    });
+    blocks.push({ type: 'progress', label: 'Rest', value: (a.restSec ?? rest) - rest, max: a.restSec ?? rest, hint: mmss(rest) });
+    blocks.push({ type: 'actions', buttons: [{ label: 'Skip rest  ⏭', tool: 'plugin_fitness_skip', args: { what: 'rest' }, variant: 'primary' }] });
+    blocks.push(figure(ex, { title: `Next up: ${ex.name}`, size: 'md' }));
+    return { blocks, refreshSeconds: 2 };
+  }
+
+  const what =
+    step.kind === 'trial'
+      ? `ONE all-out set with clean form. Stop when the form breaks.`
+      : `Set ${setNo} of ${step.sets} — target ${target} ${unitOf(ex)}${perSide}${ex.kind === 'hold' ? ' (hold)' : ''}`;
+  blocks.push(figure(ex, { title: `${stepLabel(step)} · ${ex.name}`, caption: [what, step.note ? `⚠ ${step.note}` : ''].filter(Boolean).join('\n'), size: 'lg' }));
+  blocks.push({
+    type: 'form',
+    tool: 'plugin_fitness_set',
+    button: step.kind === 'trial' ? '✓  Record' : step.sets > 1 ? `✓  Set ${setNo} done` : '✓  Done',
+    fields: [
+      {
+        name: 'value',
+        label: ex.kind === 'hold' ? 'Seconds held' : `Reps done${perSide}`,
         kind: 'number',
         min: 0,
-        max: 600,
-        unit: unit(q),
-        value: q.logged?.[i] ?? t,
+        max: 900,
+        unit: unitOf(ex),
+        ...(step.kind === 'trial' ? { required: true } : { value: target }),
+      },
+    ],
+  });
+  blocks.push({
+    type: 'actions',
+    buttons: [
+      { label: 'Skip this exercise', tool: 'plugin_fitness_skip', args: { what: 'exercise' }, confirm: `Skip ${ex.name}?` },
+      { label: 'End quest', tool: 'plugin_fitness_end', variant: 'danger', confirm: 'End the quest now? What you did so far is saved.' },
+    ],
+  });
+  const upcoming = a.steps.slice(a.cursor + 1);
+  if (upcoming.length) {
+    blocks.push({
+      type: 'list',
+      items: upcoming.map((s) => ({
+        title: exercise(s.exercise).name,
+        subtitle: s.kind === 'trial' ? 'Gate trial · one all-out set' : `${stepLabel(s)} · ${s.sets} × ${s.target.join('·')} ${unitOf(exercise(s.exercise))}`,
+        tone: 'muted',
+      })),
+    });
+  }
+  return { blocks };
+}
+
+function completeBlocks(state: HunterState, a: ActiveSession, today: string): Block[] {
+  const f = a.finished!;
+  const blocks: Block[] = [];
+  if (f.outcome === 'abandoned') {
+    blocks.push({ type: 'heading', text: 'Quest ended' }, { type: 'text', tone: 'warn', text: 'Nothing was logged, so the quest stays open. Start it again any time today.' });
+    blocks.push({ type: 'actions', buttons: [{ label: '▶  START AGAIN', tool: 'plugin_fitness_start', variant: 'primary' }] });
+    return blocks;
+  }
+  blocks.push({ type: 'heading', text: f.outcome === 'gate' ? 'Gate cleared' : 'Quest complete' });
+  blocks.push({
+    type: 'stats',
+    items: [
+      { label: 'XP gained', value: `+${f.xp}`, tone: 'ok' },
+      { label: 'Level', value: f.levelAfter > f.levelBefore ? `${f.levelBefore} → ${f.levelAfter}` : String(f.levelAfter), tone: f.levelAfter > f.levelBefore ? 'ok' : 'default' },
+      { label: 'Rank', value: f.rankAfter !== f.rankBefore ? `${f.rankBefore} → ${f.rankAfter}` : f.rankAfter, tone: f.rankAfter !== f.rankBefore ? 'ok' : 'default' },
+      { label: 'Streak', value: `${streak(state, today)} days` },
+    ],
+  });
+  const items = [
+    ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: 'new', tone: 'ok' })),
+    ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: 'build the base, then climb again', tone: 'warn' })),
+    ...f.logged.map((l) => ({ title: exercise(l.exercise).name, subtitle: l.sets.join(' · ') })),
+    ...f.skipped.map((n) => ({ title: `${n} — skipped`, tone: 'muted' })),
+  ];
+  if (items.length) blocks.push({ type: 'list', items });
+  const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
+  blocks.push({ type: 'text', text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? 'Recovery'}.` });
+  return blocks;
+}
+
+// ---- 2. Status Window ------------------------------------------------------------
+
+function statusBlocks(state: HunterState, today: string): Block[] {
+  const level = hunterLevel(state.xp);
+  const s = stats(state, today);
+  const st = streak(state, today);
+  const base = xpForLevel(level);
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Status Window' },
+    {
+      type: 'stats',
+      items: [
+        { label: 'Hunter', value: state.profile.name || 'Unnamed', hint: `Day ${daysBetween(state.startDate, today) + 1}` },
+        { label: 'Rank', value: state.rank, tone: 'ok' },
+        { label: 'Level', value: String(level), hint: `${state.xp} XP` },
+        { label: 'Streak', value: `${st} day${st === 1 ? '' : 's'}`, tone: st > 0 ? 'ok' : 'muted' },
+        { label: 'STR', value: String(s.STR), hint: 'pull · push · dip' },
+        { label: 'AGI', value: String(s.AGI), hint: 'core · L-sit' },
+        { label: 'VIT', value: String(s.VIT), hint: 'legs · hinge' },
+        { label: 'END', value: String(s.END), hint: 'hang · consistency' },
+      ],
+    },
+    { type: 'progress', label: `Level ${level} → ${level + 1}`, value: state.xp - base, max: xpForLevel(level + 1) - base, hint: `${state.xp - base} / ${xpForLevel(level + 1) - base} XP` },
+  ];
+  if (state.injuries.length) {
+    blocks.push({
+      type: 'list',
+      items: state.injuries.map((i) => ({
+        title: `${i.side === 'both' ? '' : `${i.side} `}${i.area.replace('_', ' ')} — ${i.pain}/10`,
+        subtitle: `since ${i.since}${i.note ? ` · ${i.note}` : ''} · ${i.pain <= 2 ? 'train, stay below pain' : i.pain <= 4 ? 'light work only' : 'rest this area'} · update it in the Profile section`,
+        badge: 'Status effect',
+        tone: i.pain >= 5 ? 'error' : 'warn',
       })),
     });
   }
   return blocks;
 }
 
-export function renderPage(state: HunterState | null, today: string, defaultTimezone: string): Block[] {
-  if (!state) return awakening(defaultTimezone);
-  const blocks: Block[] = [];
-  const level = hunterLevel(state.xp);
-  const s = stats(state, today);
-  const st = streak(state, today);
+// ---- 3. Your Path -------------------------------------------------------------------
 
-  // ---- Status Window ----
-  blocks.push({ type: 'heading', text: 'Status Window' });
+function pathBlocks(state: HunterState, today: string): Block[] {
+  const week = weekPlan(state, today);
+  const mark = { done: '✓', today: '▶', planned: '', missed: '✗', before: '' } as const;
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Your Path' },
+    {
+      type: 'table',
+      columns: week.map((d) => `${dayName(d.date)} ${d.date.slice(8)}.`),
+      rows: [week.map((d) => `${mark[d.status]} ${d.label}`.trim())],
+    },
+    {
+      type: 'text',
+      tone: 'muted',
+      text:
+        `Training days: ${formatDays(state.profile.trainingDays)} at ${state.profile.questTime}. ` +
+        `Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week.`,
+    },
+  ];
   blocks.push({
-    type: 'stats',
-    items: [
-      { label: 'Hunter', value: state.profile.name || 'Unnamed', hint: `Day ${daysBetween(state.startDate, today) + 1}` },
-      { label: 'Rank', value: state.rank, tone: 'ok' },
-      { label: 'Level', value: String(level), hint: `${state.xp} XP` },
-      { label: 'Streak', value: `${st} day${st === 1 ? '' : 's'}`, tone: st > 0 ? 'ok' : 'muted' },
-      { label: 'STR', value: String(s.STR), hint: 'pull · push · dip' },
-      { label: 'AGI', value: String(s.AGI), hint: 'core · L-sit' },
-      { label: 'VIT', value: String(s.VIT), hint: 'legs · hinge' },
-      { label: 'END', value: String(s.END), hint: 'hang · consistency' },
-    ],
+    type: 'list',
+    items: ladderProgress(state).map((p) => ({
+      title: `${p.name}: ${p.current}`,
+      subtitle: p.held
+        ? `On hold — ${p.held}. A lighter exercise stands in until then.`
+        : p.next
+          ? `Next: ${p.next} — ${p.needs} (${p.top}/2 done)`
+          : 'Top of this ladder — keep it sharp.',
+      badge: `${p.level}/${p.of}`,
+      tone: p.held ? 'warn' : p.top > 0 ? 'ok' : 'default',
+    })),
   });
-  const base = xpForLevel(level);
-  blocks.push({ type: 'progress', label: `Level ${level} → ${level + 1}`, value: state.xp - base, max: xpForLevel(level + 1) - base, hint: `${state.xp - base} / ${xpForLevel(level + 1) - base} XP` });
-  const needs = nextRankNeeds(state);
+  const check = rankChecklist(state);
   const gateIn = daysBetween(today, state.nextGate);
-  blocks.push({
-    type: 'text',
-    tone: 'muted',
-    text: [
-      needs ? `Next rank ${needs.rank}: ${needs.missing.length ? needs.missing.join(', ') : 'all requirements met — clear the next Gate'}` : 'Maximum rank reached.',
-      gateIn <= 0 ? 'A Gate is open: it replaces your next training quest.' : `Next Gate in ${gateIn} day${gateIn === 1 ? '' : 's'} (${state.nextGate}).`,
-    ].join('\n'),
-  });
-  if (state.injuries.length) {
+  if (check) {
     blocks.push({
       type: 'list',
-      items: state.injuries.map((i) => ({
-        title: `${i.side === 'both' ? '' : `${i.side} `}${i.area.replace('_', ' ')} — ${i.pain}/10`,
-        subtitle: `since ${i.since}${i.note ? ` · ${i.note}` : ''} · ${i.pain <= 2 ? 'train, stay below pain' : i.pain <= 4 ? 'light work only' : 'rest this area'}`,
-        badge: 'Status effect',
-        tone: i.pain >= 5 ? 'error' : 'warn',
+      items: check.items.map((i) => ({
+        title: `${i.met ? '✓' : '○'} ${i.label}`,
+        subtitle: i.best !== undefined ? `best so far: ${i.best}` : undefined,
+        tone: i.met ? 'ok' : 'default',
       })),
+      empty: 'All requirements met.',
     });
-  }
-
-  // ---- Daily Quest ----
-  const quest = questFor(state, today);
-  const title = quest.type === 'gate' ? 'Gate' : quest.type === 'training' ? `Daily Quest — Training ${quest.session}` : 'Daily Quest — Recovery';
-  blocks.push({ type: 'divider' });
-  blocks.push({ type: 'heading', text: title });
-  blocks.push({ type: 'text', text: questIntro(quest.type, quest.deload, quest.done) });
-  for (const w of quest.warmup) blocks.push(...exerciseBlocks(w, { log: false, warmup: true }));
-  for (const m of quest.main) blocks.push(...exerciseBlocks(m, { log: quest.type === 'training' && !quest.done }));
-  if (quest.skipped.length) {
     blocks.push({
-      type: 'list',
-      items: quest.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} skipped`, subtitle: x.reason, tone: 'warn' })),
+      type: 'text',
+      tone: 'muted',
+      text: `Rank ${check.rank} needs everything above. Ranks are decided at Gates — ${gateIn <= 0 ? 'one is open now' : `next Gate on ${state.nextGate} (in ${gateIn} day${gateIn === 1 ? '' : 's'})`}.`,
     });
-  }
-  if (quest.type === 'gate' && !quest.done) {
-    // Show how each trial is done: same animation, cues and mistake as in training.
-    for (const t of quest.gateTests) {
-      const ex = exercise(TEST_EXERCISE[t]);
-      blocks.push({
-        type: 'figure',
-        svg: figureSvg(ex.id),
-        alt: `${ex.name} — animated demonstration`,
-        title: `Trial · ${TEST_LABEL[t]}`,
-        caption: `One all-out set of ${ex.name} with clean form. Stop when the form breaks and note the ${ex.kind === 'hold' ? 'seconds' : 'reps'}.`,
-        bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
-        size: 'md',
-        collapsed: false,
-      });
-    }
-    const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
-    if (left.length) {
-      blocks.push({
-        type: 'text',
-        tone: 'warn',
-        text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, '')).join(', ')}. They join a later Gate.`,
-      });
-    }
-    blocks.push({
-      type: 'form',
-      title: 'Gate trials — one all-out set each, strict form, full rest between',
-      tool: 'plugin_fitness_gate',
-      button: 'Clear the Gate',
-      fields: quest.gateTests.map((t) => ({ name: t, label: TEST_LABEL[t], kind: 'number', min: 0, max: 600, unit: t === 'pullups' || t === 'pushups' || t === 'dips' ? 'reps' : 's' })),
-    });
-  } else if (quest.done) {
-    blocks.push({ type: 'text', tone: 'ok', text: T.questDone });
   } else {
-    blocks.push({ type: 'actions', buttons: [{ label: 'Complete Quest', tool: 'plugin_fitness_complete', variant: 'primary' }] });
+    blocks.push({ type: 'text', tone: 'ok', text: 'Rank S. There is nothing above you.' });
   }
+  return blocks;
+}
 
-  // ---- Skills ----
-  blocks.push({ type: 'divider' });
-  blocks.push({ type: 'heading', text: 'Skills' });
-  for (const id of TRACKED_LADDERS) {
-    const ladder = LADDERS[id];
-    const at = state.levels[id];
-    const next = ladder.levels[at + 1];
-    blocks.push({
-      type: 'progress',
-      label: `${ladder.name}: ${exercise(ladder.levels[at]!).name}`,
-      value: at + 1,
-      max: ladder.levels.length,
-      hint: next ? `next: ${exercise(next).name}` : 'mastered',
+// ---- 4. Skill Codex ---------------------------------------------------------------------
+
+function codexBlocks(state: HunterState): Block[] {
+  const blocks: Block[] = [{ type: 'heading', text: 'Skill Codex' }, { type: 'text', tone: 'muted', text: 'Every exercise in the System. Open one to see how it moves.' }];
+  const seen = new Set<string>();
+  for (const l of Object.values(LADDERS)) {
+    l.levels.forEach((id, i) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const ex = exercise(id);
+      const tracked = l.id !== 'pull_floor' ? state.levels[l.id as keyof HunterState['levels']] : 0;
+      const tag = i < tracked ? ' ✓' : i === tracked ? ' ◀ you are here' : '';
+      blocks.push(figure(ex, { title: `${l.name} ${i + 1} · ${ex.name}${tag}`, caption: `${ex.sets} × ${ex.min}–${ex.max} ${unitOf(ex)}${ex.perSide ? ' per side' : ''}`, collapsed: true }));
     });
   }
-  if (!state.profile.equipment.tower) blocks.push({ type: 'text', tone: 'muted', text: T.noTower });
+  for (const ex of EXERCISES) {
+    if (seen.has(ex.id)) continue;
+    blocks.push(figure(ex, { title: `Mobility · ${ex.name}`, caption: `${ex.min} ${unitOf(ex)}${ex.perSide ? ' per side' : ''}`, collapsed: true }));
+  }
+  return blocks;
+}
 
-  // ---- History ----
-  blocks.push({ type: 'divider' });
-  blocks.push({ type: 'heading', text: 'History' });
+// ---- 5. History + profile -------------------------------------------------------------------
+
+function historyBlocks(state: HunterState, today: string): Block[] {
+  const blocks: Block[] = [{ type: 'heading', text: 'History' }];
   const weeks = Array.from({ length: 12 }, (_, i) => addDays(today, -7 * (11 - i)));
   const volume = weeks.map((end) => {
     const start = addDays(end, -6);
@@ -223,36 +397,19 @@ export function renderPage(state: HunterState | null, today: string, defaultTime
     type: 'table',
     columns: ['Date', 'Exercise', 'Sets'],
     rows: [...state.logs].reverse().slice(0, 15).map((l) => [l.date, exercise(l.exercise).name, l.sets.join(' · ')]),
-    empty: 'No sets logged yet.',
+    empty: 'No sets logged yet — they appear here after your first quest.',
   });
   blocks.push({
     type: 'list',
     items: [...state.events].reverse().slice(0, 8).map((e) => ({ title: e.text, subtitle: e.date, badge: e.kind.replace('_', ' ') })),
     empty: 'The System log is empty.',
   });
-
-  // ---- Profile ----
-  blocks.push({ type: 'divider' });
-  blocks.push({ type: 'heading', text: 'Profile' });
-  blocks.push(profileForm(state));
-  blocks.push(painForm());
   return blocks;
-}
-
-function questIntro(type: string, deload: boolean, done: boolean): string {
-  const lines: string[] = [];
-  if (type === 'gate') lines.push(T.gateIntro);
-  else if (type === 'training') lines.push(T.trainingIntro);
-  else lines.push(T.recoveryIntro);
-  if (deload && type === 'training') lines.push(T.deload);
-  if (done) lines.push(T.questDoneShort);
-  return lines.join('\n');
 }
 
 function profileForm(state: HunterState): Block {
   const p = state.profile;
-  const last = [...state.body].reverse();
-  const waist = last.find((b) => b.waistCm !== undefined)?.waistCm;
+  const waist = [...state.body].reverse().find((b) => b.waistCm !== undefined)?.waistCm;
   return {
     type: 'form',
     title: 'Hunter profile — change anything, the System adapts',

@@ -486,15 +486,110 @@ export function rankFor(state: HunterState): Rank {
   return rank;
 }
 
+const reqLabel = (req: Req): string =>
+  req.test
+    ? `${TEST_LABEL[req.test].replace(/ \(.*\)$/, '')} ${req.min}${req.test === 'dead_hang' || req.test === 'hollow_hold' || req.test === 'l_sit' ? ' s' : ''}`
+    : `${LADDERS[req.ladder!].name}: reach ${exercise(req.level!).name}`;
+
+/** Every requirement of the next rank, met or not (tower-only ones waived without a tower). */
+export function rankChecklist(state: HunterState): { rank: Rank; items: { label: string; met: boolean; best?: number }[] } | null {
+  const next = RANKS[RANKS.indexOf(state.rank) + 1] as Exclude<Rank, 'E'> | undefined;
+  if (!next) return null;
+  const items = RANK_REQS[next]
+    .filter((req) => !(req.tower && !state.profile.equipment.tower))
+    .map((req) => {
+      const item: { label: string; met: boolean; best?: number } = { label: reqLabel(req), met: meets(state, req) };
+      if (req.test && state.best[req.test] !== undefined) item.best = state.best[req.test]!;
+      return item;
+    });
+  return { rank: next, items };
+}
+
 /** What still stands between the hunter and the next rank. */
 export function nextRankNeeds(state: HunterState): { rank: Rank; missing: string[] } | null {
-  const i = RANKS.indexOf(state.rank);
-  const next = RANKS[i + 1] as Exclude<Rank, 'E'> | undefined;
-  if (!next) return null;
-  const missing = RANK_REQS[next].filter((req) => !meets(state, req)).map((req) =>
-    req.test ? `${TEST_LABEL[req.test]} ≥ ${req.min}${req.test === 'dead_hang' || req.test === 'hollow_hold' || req.test === 'l_sit' ? ' s' : ''}` : `${LADDERS[req.ladder!].name}: reach ${exercise(req.level!).name}`,
-  );
-  return { rank: next, missing };
+  const c = rankChecklist(state);
+  return c ? { rank: c.rank, missing: c.items.filter((i) => !i.met).map((i) => i.label) } : null;
+}
+
+// ---- the path ahead ----------------------------------------------------------------
+
+export interface DayPlan {
+  date: string;
+  /** e.g. "Training A", "Recovery", "Gate". */
+  label: string;
+  status: 'done' | 'today' | 'planned' | 'missed' | 'before';
+}
+
+const questLabel = (type: QuestType, session?: 'A' | 'B'): string => (type === 'training' ? `Training ${session ?? ''}`.trim() : type === 'gate' ? 'Gate' : 'Recovery');
+
+/** Monday-to-Sunday plan of the week holding `today`: what was done, what comes. */
+export function weekPlan(state: HunterState, today: string): DayPlan[] {
+  const monday = addDays(today, -((weekday(today) + 6) % 7));
+  const trainingsBefore = state.quests.filter((q) => q.type === 'training' && q.date < today).length;
+  let futureTrainings = 0;
+  let gatePlanned = false;
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(monday, i);
+    const record = state.quests.find((q) => q.date === date);
+    if (record) return { date, label: questLabel(record.type, record.session), status: date === today ? 'today' : 'done' };
+    if (date < today) {
+      return { date, label: isTrainingDay(state, date) ? 'Training' : 'Recovery', status: date < state.startDate ? 'before' : 'missed' };
+    }
+    if (date === today) {
+      const q = questFor(state, date);
+      if (q.type === 'gate') gatePlanned = true;
+      if (q.type === 'training') futureTrainings++;
+      return { date, label: questLabel(q.type, q.session), status: 'today' };
+    }
+    if (!isTrainingDay(state, date)) return { date, label: 'Recovery', status: 'planned' };
+    if (!gatePlanned && date >= state.nextGate && gateTestsFor(state).length) {
+      gatePlanned = true;
+      return { date, label: 'Gate', status: 'planned' };
+    }
+    const session = (trainingsBefore + futureTrainings) % 2 === 0 ? 'A' : 'B';
+    futureTrainings++;
+    return { date, label: `Training ${session}`, status: 'planned' };
+  });
+}
+
+export interface LadderProgress {
+  ladder: TrackedLadder;
+  name: string;
+  level: number;
+  of: number;
+  current: string;
+  next: string | null;
+  /** How to unlock the next step. */
+  needs: string | null;
+  /** Sessions at the top of the range so far (2 unlock). */
+  top: number;
+  /** Why the ladder is held back today, if it is. */
+  held?: string;
+}
+
+export function ladderProgress(state: HunterState): LadderProgress[] {
+  return TRACKED_LADDERS.map((id) => {
+    const levels = LADDERS[id].levels;
+    const at = state.levels[id];
+    const ex = exercise(levels[at]!);
+    const next = levels[at + 1] ? exercise(levels[at + 1]!) : null;
+    const p: LadderProgress = {
+      ladder: id,
+      name: LADDERS[id].name,
+      level: at + 1,
+      of: levels.length,
+      current: ex.name,
+      next: next?.name ?? null,
+      needs: next ? `${ex.sets} × ${ex.max}${ex.kind === 'hold' ? ' s' : ''}${ex.perSide ? ' per side' : ''} in 2 sessions` : null,
+      top: Math.min(state.streaks[ex.id]?.top ?? 0, 2),
+    };
+    if (!hasEquipment(ex, state.profile)) p.held = ex.equipment === 'tower' ? 'needs the power tower' : 'needs a chair or bench';
+    else {
+      const b = blockedBy(ex, state.injuries);
+      if (b) p.held = `${b.area.replace('_', ' ')} pain ${b.pain}/10`;
+    }
+    return p;
+  });
 }
 
 export const TEST_LABEL: Record<GateTest, string> = {

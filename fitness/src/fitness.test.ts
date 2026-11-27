@@ -4,7 +4,7 @@ import { EXERCISES, LADDERS } from './exercises.js';
 import { renderFigure } from './figure.js';
 import { registerFitness, type Clock } from './index.js';
 import { renderPage } from './page.js';
-import { addDays, clearGate, completeQuest, isDeload, logSets, newHunter, parseDays, parseTime, questFor, rankFor, reportPain, updateProfile } from './rules.js';
+import { addDays, clearGate, completeQuest, isDeload, ladderProgress, logSets, newHunter, parseDays, parseTime, questFor, rankFor, reportPain, updateProfile, weekPlan } from './rules.js';
 import type { HunterState, PluginRegistry, Profile } from './types.js';
 
 // ---- fakes -----------------------------------------------------------------
@@ -219,10 +219,8 @@ describe('gate safety', () => {
     const q = questFor(s, MONDAY);
     expect(q.type).toBe('gate');
     expect(q.gateTests).toEqual(['hollow_hold']);
-    const page = renderPage(s, MONDAY, 'UTC') as { type: string; text?: string }[];
+    const page = renderPage(s, MONDAY, new Date(`${MONDAY}T09:00:00Z`), 'UTC').blocks as { type: string; text?: string }[];
     expect(page.some((b) => b.type === 'text' && /Not tested today/.test(b.text ?? ''))).toBe(true);
-    // Every trial that is tested shows its animation.
-    expect(page.filter((b) => b.type === 'figure' && /^Trial · /.test((b as { title?: string }).title ?? '')).map((b) => (b as { title?: string }).title)).toEqual(['Trial · Hollow hold (seconds)']);
     reportPain(s, MONDAY, 'lower_back', 'both', 3);
     expect(questFor(s, MONDAY).type).toBe('training');
     expect(s.nextGate).toBe(MONDAY);
@@ -298,19 +296,112 @@ describe('plugin', () => {
     expect(host.pushes).toHaveLength(2);
   });
 
-  it('registers a themed page after Music and renders every section', () => {
+  it('registers a themed page after Music: start screen first, then status, path, codex, history, profile', () => {
     const host = fakeHost(clockAt('2026-11-30T09:31:00Z'));
     const page = host.pages[0]!;
     expect(page).toMatchObject({ id: 'the-system', order: 12, theme: 'hologram' });
-    const empty = page.render() as { type: string; tool?: string }[];
+    const empty = (page.render() as { blocks: { type: string; tool?: string }[] }).blocks;
     expect(empty.find((b) => b.type === 'form')?.tool).toBe('plugin_fitness_setup');
 
     host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, tower: true });
-    const blocks = page.render() as { type: string; text?: string; tool?: string }[];
+    const blocks = (page.render() as { blocks: { type: string; text?: string; tool?: string; buttons?: { tool: string }[] }[] }).blocks;
     const headings = blocks.filter((b) => b.type === 'heading').map((b) => b.text);
-    expect(headings).toEqual(['Status Window', 'Gate', 'Skills', 'History', 'Profile']);
-    expect(blocks.some((b) => b.type === 'figure')).toBe(true);
-    expect(blocks.filter((b) => b.type === 'form').map((b) => b.tool)).toEqual(['plugin_fitness_gate', 'plugin_fitness_profile', 'plugin_fitness_pain']);
-    expect(renderPage(null, MONDAY, 'UTC')[0]).toMatchObject({ type: 'heading', text: 'Awakening' });
+    expect(headings).toEqual(['Daily Quest — Mon · Gate', 'Status Window', 'Your Path', 'Skill Codex', 'History', 'Profile']);
+    expect(blocks.find((b) => b.type === 'actions')?.buttons?.[0]?.tool).toBe('plugin_fitness_start');
+    // The codex shows every exercise once.
+    expect(blocks.filter((b) => b.type === 'figure')).toHaveLength(EXERCISES.length);
+    expect(blocks.filter((b) => b.type === 'form').map((b) => b.tool)).toEqual(['plugin_fitness_profile', 'plugin_fitness_pain']);
+    expect(renderPage(null, MONDAY, new Date(), 'UTC').blocks[0]).toMatchObject({ type: 'heading', text: 'Awakening' });
+  });
+});
+
+// ---- guided quest -------------------------------------------------------------------------
+
+describe('guided quest', () => {
+  type B = { type: string; text?: string; title?: string; tool?: string; size?: string; items?: { label: string; value: string }[]; buttons?: { tool: string; args?: Record<string, unknown> }[] };
+  const render = (host: ReturnType<typeof fakeHost>) => host.pages[0]!.render() as { blocks: B[]; refreshSeconds?: number };
+
+  it('walks a training quest step by step with rest, then logs and completes it', () => {
+    const clock = clockAt('2026-11-30T09:31:00Z'); // Monday
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, pushups: 10, squats: 25, tower: false, timezone: 'Europe/Zagreb' });
+    host.call('plugin_fitness_gate', { pushups: 10, hollow_hold: 10 });
+    clock.set('2026-12-02T09:31:00Z'); // Wednesday: training A
+
+    const first = host.call('plugin_fitness_start');
+    expect(first).toMatchObject({ running: true, quest: 'training', step: 1, current: { kind: 'warmup', name: 'Cat–Cow' } });
+    let view = render(host);
+    expect(view.blocks[0]!.text).toMatch(/^Training A — step 1 of 6$/);
+    expect(view.blocks.find((b) => b.type === 'figure')).toMatchObject({ size: 'lg', title: 'Warm-up · Cat–Cow' });
+    expect(view.blocks.find((b) => b.type === 'form')?.tool).toBe('plugin_fitness_set');
+
+    host.call('plugin_fitness_set', { value: 10 }); // cat-cow
+    host.call('plugin_fitness_set', { value: 10 }); // wall slide
+    const work = host.call('plugin_fitness_set', { value: 10 }); // prone Y raise, set 1
+    expect(work.current).toMatchObject({ name: 'Prone Y Raise', set: 2, sets: 3 });
+    expect(work.rest_seconds_left).toBe(45);
+    view = render(host);
+    expect(view.refreshSeconds).toBe(2);
+    expect(view.blocks.find((b) => b.type === 'stats')?.items?.[0]).toMatchObject({ label: 'Rest', value: '0:45' });
+
+    clock.set('2026-12-02T09:31:30Z');
+    expect(host.call('plugin_fitness_status').streak_days).toBe(0);
+    expect(render(host).blocks.find((b) => b.type === 'stats')?.items?.[0]?.value).toBe('0:15');
+    host.call('plugin_fitness_skip', { what: 'rest' });
+    expect(render(host).refreshSeconds).toBeUndefined();
+
+    host.call('plugin_fitness_set', { value: 9 });
+    host.call('plugin_fitness_set', { value: 8 });
+    host.call('plugin_fitness_skip', { what: 'exercise' }); // push-up
+    host.call('plugin_fitness_skip', { what: 'exercise' }); // split squat
+    const done = host.call('plugin_fitness_end');
+    expect(done.finished).toMatchObject({ outcome: 'complete', xp: 100, logged: [{ exercise: 'prone_y_raise', sets: [10, 9, 8] }] });
+    expect(done.finished.skipped).toEqual(['Push-up', 'Split Squat', 'Dead Bug']);
+
+    const complete = render(host);
+    expect(complete.blocks[0]).toMatchObject({ type: 'heading', text: 'Quest complete' });
+    expect(complete.blocks.some((b) => b.type === 'heading' && b.text === 'Your Path')).toBe(true);
+    expect(() => host.call('plugin_fitness_start')).toThrow(/already finished/);
+    expect(host.call('plugin_fitness_status').streak_days).toBe(1);
+  });
+
+  it('a guided Gate shows each trial with its animation and clears the Gate at the end', () => {
+    const clock = clockAt('2026-11-30T09:31:00Z');
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, tower: false, pains: [{ area: 'shoulder', side: 'right', pain: 4 }] });
+    host.call('plugin_fitness_start');
+    for (let i = 0; i < 4; i++) host.call('plugin_fitness_set', { value: 1 }); // warm-ups
+    const trial = render(host).blocks;
+    expect(trial[0]!.text).toMatch(/step 5 of 5/);
+    expect(trial.find((b) => b.type === 'figure')).toMatchObject({ title: 'Gate trial · Hollow Body Hold', size: 'lg' });
+    const end = host.call('plugin_fitness_set', { value: 25 });
+    expect(end.finished).toMatchObject({ outcome: 'gate', rankAfter: 'E' });
+    expect(host.hunter().gates[0]!.results).toEqual({ hollow_hold: 25 });
+    expect(render(host).blocks[0]).toMatchObject({ text: 'Gate cleared' });
+  });
+
+  it('ending before any work leaves the quest open', () => {
+    const clock = clockAt('2026-12-01T09:31:00Z'); // Tuesday: recovery
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75 });
+    host.call('plugin_fitness_start');
+    expect(host.call('plugin_fitness_end').finished.outcome).toBe('abandoned');
+    expect(host.hunter().quests).toEqual([]);
+    expect(render(host).blocks[0]).toMatchObject({ text: 'Quest ended' });
+  });
+});
+
+describe('your path', () => {
+  it('plans the week and explains every ladder', () => {
+    const s = newHunter(profile(), MONDAY, { pushups: 10 });
+    s.nextGate = addDays(MONDAY, 42);
+    const week = weekPlan(s, addDays(MONDAY, 2));
+    expect(week.map((d) => d.label)).toEqual(['Training', 'Recovery', 'Training A', 'Recovery', 'Training B', 'Recovery', 'Recovery']);
+    expect(week.map((d) => d.status)).toEqual(['missed', 'missed', 'today', 'planned', 'planned', 'planned', 'planned']);
+    logSets(s, MONDAY, 'pushup', [15, 15, 15]);
+    const push = ladderProgress(s).find((p) => p.ladder === 'push')!;
+    expect(push).toMatchObject({ current: 'Push-up', next: 'Deep Push-up on Handles', needs: '3 × 15 in 2 sessions', top: 1 });
+    reportPain(s, MONDAY, 'shoulder', 'right', 4);
+    expect(ladderProgress(s).find((p) => p.ladder === 'push')!.held).toBe('shoulder pain 4/10');
   });
 });
