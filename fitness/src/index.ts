@@ -7,6 +7,7 @@
 // The plugin returns facts; the LLM talks to the user in their own language.
 
 import { AREAS, BY_ID, EXERCISES, LADDERS, TRACKED_LADDERS, type Area } from './exercises.js';
+import { addTreasure, checkRewards, chooseTitle, claimTreasure, removeTreasure, titleName, titleStatus, treasureGoal, treasureProgress, TREASURE_WHEN, weeklyReport } from './journey.js';
 import { renderPage } from './page.js';
 import { activeToday, endSession, recordSet, restLeft, skipRest, skipStep, startSession, type Readiness } from './session.js';
 import {
@@ -15,6 +16,7 @@ import {
   formatDays,
   hunterLevel,
   logSets,
+  logWalk,
   newHunter,
   nextRankNeeds,
   parseDays,
@@ -23,14 +25,16 @@ import {
   reportPain,
   stats,
   streak,
+  streakInfo,
   updateProfile,
+  weekday,
   xpForLevel,
   type Baseline,
   type ProfilePatch,
   type QuestItem,
 } from './rules.js';
 import { T } from './text.js';
-import { GATE_TESTS, STATE_KEY, type Feel, type GateTest, type HunterState, type PluginRegistry, type Side } from './types.js';
+import { GATE_TESTS, STATE_KEY, type Feel, type GateTest, type HunterState, type PluginRegistry, type Push, type Side, type TreasureWhen } from './types.js';
 
 export interface Clock {
   now(): Date;
@@ -39,6 +43,8 @@ export interface Clock {
 const PAGE_ID = 'the-system';
 const PAGE_URL = `/apps/${PAGE_ID}`;
 const WARNING_TIME = '19:30';
+/** Sunday, local time: the weekly report. */
+const REPORT_TIME = '20:00';
 
 // ---- small input helpers ------------------------------------------------------
 
@@ -150,12 +156,14 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
     if (!s) throw new Error('No Hunter yet. Run plugin_fitness_setup first (or open The System page in the dashboard).');
     return s;
   };
-  /** Atomic read-modify-write of the hunter. */
+  /** Atomic read-modify-write of the hunter; titles and treasure are checked after every change. */
   const mutate = <R>(fn: (s: HunterState, date: string) => R): R => {
     let out: R | undefined;
     store.update<HunterState>(STATE_KEY, (cur) => {
       if (!cur || cur.version !== 2) throw new Error('No Hunter yet. Run plugin_fitness_setup first.');
-      out = fn(cur, today(cur).date);
+      const date = today(cur).date;
+      out = fn(cur, date);
+      checkRewards(cur, date);
       return cur;
     });
     return out as R;
@@ -171,15 +179,20 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
   function statusOf(s: HunterState): Record<string, unknown> {
     const { date } = today(s);
     const level = hunterLevel(s.xp);
+    const si = streakInfo(s, date);
     return {
       hunter: s.profile.name ?? null,
+      title: titleName(s.activeTitle),
       day: Math.round((Date.parse(date) - Date.parse(s.startDate)) / 86_400_000) + 1,
       rank: s.rank,
       level,
       xp: s.xp,
       xp_to_next_level: xpForLevel(level + 1) - s.xp,
       stats: stats(s, date),
-      streak_days: streak(s, date),
+      streak_days: si.days,
+      streak_shields: si.shields,
+      titles_earned: titleStatus(s, date).filter((t) => t.earned).map((t) => t.name),
+      treasures: (s.treasures ?? []).filter((t) => !t.claimedAt).map((t) => ({ id: t.id, name: t.name, goal: treasureGoal(t), unlocked: !!t.unlockedAt, ...treasureProgress(s, t, date) })),
       injuries: s.injuries,
       skills: Object.fromEntries(
         TRACKED_LADDERS.map((l) => {
@@ -628,13 +641,131 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
     },
   });
 
-  // ---- Daily Quest push + evening warning (every minute, compares local time) ----
+  // ---- motivation: treasure, titles, bonus walk ----
+
+  registry.registerTool({
+    name: 'plugin_fitness_treasure',
+    description:
+      "Treasure: real-world rewards the Hunter sets for themselves, unlocked by progress. action 'add' (name, when: level|rank|streak|quests|title, value: e.g. 10, 'C' or a title name), 'claim' (id, once unlocked and enjoyed), 'remove' (id) or 'list'. Suggest small rewards early and bigger ones later.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'claim', 'remove', 'list'] },
+        name: { type: 'string' },
+        when: { type: 'string', enum: TREASURE_WHEN },
+        value: { type: ['string', 'number'] },
+        id: { type: ['number', 'string'] },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    handler: (args) => {
+      const id = (): number => {
+        const n = Number(args.id);
+        if (!Number.isInteger(n) || n < 1) throw new Error('id must be the treasure number');
+        return n;
+      };
+      const list = (s: HunterState, date: string): Record<string, unknown>[] =>
+        (s.treasures ?? []).map((t) => ({ id: t.id, name: t.name, goal: treasureGoal(t), ...treasureProgress(s, t, date), unlocked: t.unlockedAt ?? null, claimed: t.claimedAt ?? null }));
+      if (args.action === 'list') {
+        const s = need();
+        return { treasures: list(s, today(s).date) };
+      }
+      return mutate((s, date) => {
+        switch (args.action) {
+          case 'add': {
+            const t = addTreasure(s, date, String(args.name ?? ''), String(args.when ?? '') as TreasureWhen, args.value);
+            return { added: { id: t.id, name: t.name, goal: treasureGoal(t) }, treasures: list(s, date) };
+          }
+          case 'claim': {
+            const t = claimTreasure(s, date, id());
+            return { claimed: t.name, message: `[SYSTEM] Treasure claimed: ${t.name}. Enjoy it, Hunter.` };
+          }
+          case 'remove':
+            return { removed: removeTreasure(s, id()).name, treasures: list(s, date) };
+          default:
+            throw new Error("action must be 'add', 'claim', 'remove' or 'list'");
+        }
+      });
+    },
+  });
+
+  registry.registerTool({
+    name: 'plugin_fitness_title',
+    description: 'Titles the Hunter has earned and the ones still ahead (with progress). Pass id (or name) of an earned title to show it under the Hunter name.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, additionalProperties: false },
+    handler: (args) => {
+      if (args.id === undefined || args.id === '') {
+        const s = need();
+        return { active: titleName(s.activeTitle), titles: titleStatus(s, today(s).date) };
+      }
+      return mutate((s) => ({ active: chooseTitle(s, String(args.id)) }));
+    },
+  });
+
+  registry.registerTool({
+    name: 'plugin_fitness_walk',
+    description: 'Log a bonus walk of about 30 minutes (at least 20): +20 XP, once a day, any day. Easy extra movement, best on recovery days.',
+    inputSchema: { type: 'object', properties: { minutes: { type: 'number' }, date: { type: 'string', description: 'YYYY-MM-DD, default today' } }, additionalProperties: false },
+    handler: (args) => {
+      const minutes = optNum(args.minutes, 'minutes', 1, 600) ?? 30;
+      return mutate((s) => {
+        const d = optDate(args.date, s);
+        const r = logWalk(s, d, minutes);
+        return { ...r, date: d, message: r.already ? 'A walk is already logged for that day.' : `[SYSTEM] Bonus walk logged. (+${r.xp} XP)` };
+      });
+    },
+  });
+
+  // ---- pushes, every minute (local time): rewards, weekly report, Daily Quest, evening warning ----
+
+  /** One push for everything waiting: a single message as is, several combined. */
+  function combine(msgs: Push[]): Push {
+    if (msgs.length === 1) return msgs[0]!;
+    const actions = msgs.flatMap((m) => m.actions ?? []).slice(0, 2);
+    return { title: `[SYSTEM] ${msgs.length} new messages`, body: msgs.map((m) => m.body).join('\n'), ...(actions.length ? { actions } : {}) };
+  }
+
+  async function send(n: Push & { url?: string; tag?: string }): Promise<void> {
+    try {
+      await registry.notify!({ url: PAGE_URL, ...n });
+    } catch (err) {
+      console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   async function tick(): Promise<{ sent: string | null }> {
     const s = read();
     if (!s || !registry.notify) return { sent: null };
     const { date, time } = today(s);
     if (date < s.startDate) return { sent: null };
+
+    // Rewards first: level up, rank up, skills, titles, treasure. Take them out
+    // of the store before sending so a slow push can never repeat them.
+    if (s.outbox?.length) {
+      let msgs: Push[] = [];
+      store.update<HunterState>(STATE_KEY, (cur) => {
+        if (cur) {
+          msgs = cur.outbox ?? [];
+          delete cur.outbox;
+        }
+        return cur as HunterState;
+      });
+      if (msgs.length) {
+        await send({ ...combine(msgs), tag: `fitness-reward-${clock.now().getTime()}` });
+        return { sent: 'reward' };
+      }
+    }
+
+    if (weekday(date) === 0 && time >= REPORT_TIME && s.notified.weekly !== date && s.startDate < date) {
+      store.update<HunterState>(STATE_KEY, (cur) => {
+        if (cur) cur.notified = { ...cur.notified, weekly: date };
+        return cur as HunterState;
+      });
+      await send({ ...weeklyReport(s, date), tag: `fitness-week-${date}` });
+      return { sent: 'weekly' };
+    }
+
     const q = questFor(s, date);
     if (q.done) return { sent: null };
 
@@ -657,16 +788,11 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
           : q.type === 'training'
             ? { title: T.notify.questTitle, body: `Training ${q.session}: ${names}.${q.deload ? ' Deload week.' : ''}` }
             : { title: T.notify.recoveryTitle, body: `Mobility, about 10 minutes: ${names}.` };
-    try {
-      await registry.notify({
-        ...n,
-        url: PAGE_URL,
-        tag: `fitness-${date}`,
-        ...(q.type === 'recovery' && kind === 'quest' ? { actions: [{ label: 'Done', tool: 'plugin_fitness_complete', args: { date } }] } : {}),
-      });
-    } catch (err) {
-      console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    await send({
+      ...n,
+      tag: `fitness-${date}`,
+      ...(q.type === 'recovery' && kind === 'quest' ? { actions: [{ label: 'Done', tool: 'plugin_fitness_complete', args: { date } }] } : {}),
+    });
     return { sent: kind };
   }
 

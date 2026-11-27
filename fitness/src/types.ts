@@ -120,7 +120,11 @@ export type EventKind =
   | 'injury'
   | 'recovered'
   | 'equipment'
-  | 'profile';
+  | 'profile'
+  | 'title'
+  | 'treasure'
+  | 'comeback'
+  | 'walk';
 
 export interface SystemEvent {
   date: string;
@@ -154,12 +158,54 @@ export interface HunterState {
   rank: Rank;
   /** First day a Gate (test) is due. */
   nextGate: string;
-  /** Local dates the quest / evening warning were pushed. */
-  notified: { quest?: string; warning?: string };
+  /** Local dates the quest / evening warning / weekly report were pushed. */
+  notified: { quest?: string; warning?: string; weekly?: string };
   /** The guided quest in progress (or just finished) today. */
   active?: ActiveSession;
   /** Every pain report, for the pain chart. */
   painLog?: PainEntry[];
+  /** Lifetime tallies the titles are earned from. */
+  counters?: Counters;
+  /** Titles earned (kept forever) and the one shown under the name. */
+  titles?: { id: string; date: string }[];
+  activeTitle?: string;
+  /** The hunter picked the active title themselves: new titles do not replace it. */
+  titleChosen?: boolean;
+  /** Real-world rewards the hunter set for themselves. */
+  treasures?: Treasure[];
+  nextTreasureId?: number;
+  /** Dates of bonus walks. */
+  walks?: string[];
+  /** Pushes waiting for the next minute tick (level up, rank up, titles, treasure). */
+  outbox?: Push[];
+}
+
+export interface Counters {
+  sideQuests: number;
+  lightDays: number;
+  comebacks: number;
+  skills: number;
+  reps: number;
+  walks: number;
+}
+
+export type TreasureWhen = 'level' | 'rank' | 'streak' | 'quests' | 'title';
+
+export interface Treasure {
+  id: number;
+  name: string;
+  when: TreasureWhen;
+  /** Level / streak days / quest count, a rank letter, or a title id. */
+  target: number | string;
+  createdAt: string;
+  unlockedAt?: string;
+  claimedAt?: string;
+}
+
+export interface Push {
+  title: string;
+  body: string;
+  actions?: { label: string; tool: string; args?: Record<string, unknown> }[];
 }
 
 export type StepKind = 'warmup' | 'work' | 'trial' | 'recovery' | 'rehab';
@@ -196,6 +242,9 @@ export interface SessionSummary {
   skipped: string[];
   /** The rehab side quest was done. */
   sideQuest?: string;
+  /** Titles earned and treasures unlocked by this quest (names). */
+  titles?: string[];
+  treasures?: { id: number; name: string }[];
 }
 
 export interface ActiveSession {

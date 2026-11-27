@@ -3,7 +3,8 @@
 // Pure functions over the state; `now` is passed in.
 
 import { exercise } from './exercises.js';
-import { addXp, clearGate, completeQuest, event, hunterLevel, logSets, questFor, TEST_EXERCISE, XP, type QuestItem } from './rules.js';
+import { checkRewards } from './journey.js';
+import { addXp, clearGate, completeQuest, counters, event, hunterLevel, logSets, questFor, TEST_EXERCISE, XP, type QuestItem } from './rules.js';
 import type { ActiveSession, Feel, GateTest, HunterState, SessionStep, SessionSummary, Sleep, Soreness } from './types.js';
 
 /** Rest after a Gate trial: full recovery before the next all-out set. */
@@ -177,7 +178,9 @@ function finish(state: HunterState, a: ActiveSession, date: string, now: Date): 
     const didSomething = a.type === 'recovery' ? a.steps.some((s) => s.kind === 'recovery' && s.done.length > 0) || rehabDone : work.length > 0;
     if (didSomething) {
       completeQuest(state, date);
+      if (a.light) counters(state).lightDays++;
       if (rehabDone && a.sideQuest) {
+        counters(state).sideQuests++;
         event(state, date, 'quest_complete', `Side quest complete: ${a.sideQuest}. (+${XP.sideQuest} XP)`);
         addXp(state, date, XP.sideQuest);
         summary.sideQuest = a.sideQuest;
@@ -185,6 +188,12 @@ function finish(state: HunterState, a: ActiveSession, date: string, now: Date): 
     } else {
       summary.outcome = 'abandoned';
     }
+  }
+
+  if (summary.outcome !== 'abandoned') {
+    const r = checkRewards(state, date);
+    if (r.titles.length) summary.titles = r.titles;
+    if (r.treasures.length) summary.treasures = r.treasures.map((t) => ({ id: t.id, name: t.name }));
   }
 
   summary.xp = state.xp - xpBefore;
