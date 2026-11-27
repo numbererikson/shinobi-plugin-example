@@ -1,7 +1,7 @@
 {
   "name": "shinobi-plugin-fitness",
-  "version": "0.2.0",
-  "description": "Reference Shinobi plugin — long-term adaptive fitness mission state (fitness_180) over the writable per-plugin state store. Structured facts only; the LLM owns the language.",
+  "version": "2.0.0",
+  "description": "The System — a bodyweight strength plugin for Shinobi: progression ladders, daily quests, ranks E→S, animated exercise figures, injury-aware substitutions. Power tower optional.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,7 +18,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "bundle": "npm run build && node scripts/bundle.mjs",
+    "bundle": "tsc && node scripts/bundle.mjs",
+    "preview": "tsc && node scripts/preview.mjs",
     "test": "vitest run",
     "prepare": "tsc",
     "prepublishOnly": "npm run build"
@@ -28,8 +29,8 @@
     "shinobi-plugin",
     "mcp",
     "claude-code",
-    "ai-agents",
-    "fitness"
+    "fitness",
+    "calisthenics"
   ],
   "author": "Tomislav Krizan",
   "license": "MIT",
@@ -40,6 +41,8 @@
   },
   "homepage": "https://github.com/numbererikson/shinobi-plugin-example/tree/main/fitness#readme",
   "devDependencies": {
+    "@types/node": "^20.19.43",
+    "esbuild": "^0.24.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },

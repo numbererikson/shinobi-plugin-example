@@ -1,204 +1,628 @@
-// Pure deterministic rules for the fitness plugin. No IO, no randomness, no
-// natural language — every function is a referentially-transparent map from
-// state to facts, which is what makes the plugin testable and the LLM the only
-// source of words.
+// Pure rules: no IO, no clock, no randomness. Every function takes the state
+// (and today's local date where it matters) and returns facts or a new state.
 
-import type {
-  EquipmentLevel,
-  FitnessMission,
-  JointRestriction,
-  PainArea,
-  RestrictionState,
-  TodayRestriction,
-  TrainingPhase,
+import { AREAS, BY_ID, exercise, LADDERS, RECOVERY, TRACKED_LADDERS, WARMUP_A, WARMUP_B, type Area, type Exercise, type LadderId } from './exercises.js';
+import {
+  GATE_TESTS,
+  RANKS,
+  type GateTest,
+  type HunterState,
+  type Injury,
+  type Profile,
+  type QuestType,
+  type Rank,
+  type Side,
+  type SystemEvent,
+  type TrackedLadder,
 } from './types.js';
 
-const DAY_MS = 86_400_000;
+export const XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500 } as const;
+export const GATE_EVERY_DAYS = 42;
+export const DELOAD_EVERY_WEEKS = 5;
+const MAX_LOGS = 3000;
+const MAX_EVENTS = 80;
+const MAX_HISTORY = 300;
+const MAX_QUESTS = 1100;
 
-/** Parse a YYYY-MM-DD (or ISO) date to a UTC-midnight epoch day count. */
-function epochDay(date: string): number {
-  return Math.floor(Date.parse(`${date.slice(0, 10)}T00:00:00Z`) / DAY_MS);
+// ---- dates (local calendar dates as YYYY-MM-DD) -----------------------------
+
+export function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
-export function todayIso(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
-}
-
-/** Whole days from `from` to `to`, never negative. */
 export function daysBetween(from: string, to: string): number {
-  return Math.max(0, epochDay(to) - epochDay(from));
+  return Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
 }
 
-/** 1-based mission day: the start date is day 1. */
-export function dayOfMission(startedAt: string, today: string): number {
-  return daysBetween(startedAt, today) + 1;
+export function weekday(date: string): number {
+  return new Date(`${date}T12:00:00Z`).getUTCDay();
 }
 
-/** Default phase for a given mission day (SPEC §7.3). */
-export function phaseForDay(day: number): { number: TrainingPhase['number']; name: TrainingPhase['name'] } {
-  if (day <= 30) return { number: 1, name: 'foundation' };
-  if (day <= 75) return { number: 2, name: 'base_strength' };
-  if (day <= 135) return { number: 3, name: 'progressive_strength' };
-  return { number: 4, name: 'definition' };
+// ---- new hunter -------------------------------------------------------------
+
+export interface Baseline {
+  pushups?: number;
+  pullups?: number;
+  squats?: number;
+  wallSit?: number;
+  deadHang?: number;
+  dips?: number;
+  hollowHold?: number;
+  lSit?: number;
 }
 
-function countCompletedInLastDays(mission: FitnessMission, today: string, window: number): number {
-  const cutoff = epochDay(today) - window;
-  return mission.history.filter((w) => w.completed && epochDay(w.date) > cutoff).length;
+export function newHunter(profile: Profile, today: string, baseline: Baseline = {}): HunterState {
+  const state: HunterState = {
+    version: 2,
+    startDate: today,
+    profile,
+    levels: { pull: 0, dip: 0, push: 1, legs: 1, hinge: 0, core: 0, lsit: 0 },
+    streaks: {},
+    injuries: [],
+    logs: [],
+    quests: [],
+    body: profile.weightKg ? [{ date: today, weightKg: profile.weightKg }] : [],
+    gates: [],
+    events: [],
+    profileHistory: [],
+    best: {},
+    xp: 0,
+    rank: 'E',
+    // The first training day is the Awakening Gate: real numbers place every ladder.
+    nextGate: today,
+    notified: {},
+  };
+  place(state, {
+    pushups: baseline.pushups,
+    pullups: baseline.pullups,
+    dips: baseline.dips,
+    dead_hang: baseline.deadHang,
+    hollow_hold: baseline.hollowHold,
+    l_sit: baseline.lSit,
+  }, { squats: baseline.squats, wallSit: baseline.wallSit });
+  event(state, today, 'awakening', 'You have been chosen. The System is now active.');
+  return state;
 }
 
-function hasHighPainRestriction(r: RestrictionState): boolean {
-  return (
-    r.shoulder?.status === 'avoid' ||
-    r.knee?.status === 'avoid' ||
-    r.back?.status === 'avoid' ||
-    (r.temporary?.some((t) => t.severity === 'high') ?? false)
-  );
-}
+// ---- placement: test numbers → ladder levels (only ever raises) --------------
 
-/**
- * Effective phase for today. Advancement past the mission's stored phase is
- * delayed while consistency is low, a high-pain restriction is active, or the
- * mission is paused (SPEC §7.3). Never regresses below the stored phase.
- */
-export function effectivePhase(mission: FitnessMission, today: string): TrainingPhase {
-  const stored = mission.phase;
-  const byDay = phaseForDay(dayOfMission(mission.startedAt, today));
-  if (byDay.number <= stored.number) return stored;
+const idx = (ladder: LadderId, id: string): number => LADDERS[ladder].levels.indexOf(id);
 
-  const blocked =
-    mission.status === 'paused' ||
-    countCompletedInLastDays(mission, today, 14) < 4 ||
-    hasHighPainRestriction(mission.restrictions);
-  if (blocked) return stored;
-
-  return { number: byDay.number, name: byDay.name, startedAt: today };
-}
-
-/** Level shown to the LLM for a joint, derived from status + last pain value. */
-function jointLevel(joint: JointRestriction): TodayRestriction['level'] | null {
-  if (joint.status === 'cleared') return null;
-  if (joint.status === 'avoid') return 'avoid';
-  // 'watch': a 3-4 pain reading is a caution; an old/low flag stays a watch.
-  return (joint.lastPain ?? 0) >= 3 ? 'caution' : 'watch';
-}
-
-/**
- * Structured restrictions for today. One entry per affected area. Only the
- * shoulder carries graded (watch/caution/avoid) guidance because that is the
- * only joint the spec details; knee/back surface at high pain only.
- */
-export function todayRestrictions(r: RestrictionState): TodayRestriction[] {
-  const out: TodayRestriction[] = [];
-
-  if (r.shoulder) {
-    const level = jointLevel(r.shoulder);
-    if (level) {
-      out.push({
-        area: 'shoulder',
-        side: r.shoulder.side,
-        level,
-        messageCode: level === 'avoid' ? 'SHOULDER_PAIN_HIGH' : 'NO_HEAVY_OVERHEAD_PRESSING',
-      });
-    }
+export function placementFor(results: Partial<Record<GateTest, number>>, legs: { squats?: number | undefined; wallSit?: number | undefined } = {}): Partial<Record<TrackedLadder, number>> {
+  const out: Partial<Record<TrackedLadder, number>> = {};
+  const r = results;
+  if (r.pullups !== undefined || r.dead_hang !== undefined) {
+    const p = r.pullups ?? 0;
+    const hang = r.dead_hang ?? 0;
+    out.pull = p >= 15 ? idx('pull', 'archer_pullup')
+      : p >= 10 ? idx('pull', 'chest_to_bar')
+      : p >= 3 ? idx('pull', 'pullup')
+      : p >= 1 || hang >= 30 ? idx('pull', 'negative_pullup')
+      : hang >= 15 ? idx('pull', 'scapular_pullup')
+      : 0;
   }
-  if (r.knee?.status === 'avoid') {
-    out.push({ area: 'knee', side: r.knee.side, level: 'avoid', messageCode: 'KNEE_PAIN_HIGH' });
+  if (r.pushups !== undefined) {
+    const p = r.pushups;
+    out.push = p >= 45 ? idx('push', 'pseudo_planche_pushup')
+      : p >= 30 ? idx('push', 'decline_pushup')
+      : p >= 20 ? idx('push', 'deep_pushup')
+      : p >= 6 ? idx('push', 'pushup')
+      : p >= 1 ? idx('push', 'incline_pushup')
+      : 0;
   }
-  if (r.back?.status === 'avoid') {
-    out.push({ area: 'back', side: r.back.side, level: 'avoid', messageCode: 'BACK_PAIN_HIGH' });
+  if (r.dips !== undefined) out.dip = r.dips >= 3 ? idx('dip', 'dip') : r.dips >= 1 ? idx('dip', 'negative_dip') : 0;
+  if (r.l_sit !== undefined) out.lsit = r.l_sit >= 8 ? idx('lsit', 'l_sit') : r.l_sit >= 1 ? idx('lsit', 'tuck_l_sit') : 0;
+  if (r.hollow_hold !== undefined) out.core = r.hollow_hold >= 40 ? idx('core', 'knee_raise') : r.hollow_hold >= 15 ? idx('core', 'hollow_hold') : 0;
+  if (legs.squats !== undefined || legs.wallSit !== undefined) {
+    const s = legs.squats ?? 0;
+    out.legs = s >= 40 ? idx('legs', 'bulgarian_split_squat') : s >= 20 ? idx('legs', 'split_squat') : s >= 8 || (legs.wallSit ?? 0) >= 30 ? idx('legs', 'squat') : 0;
   }
   return out;
 }
 
-/** Map a logged pain value to its coarse restriction level (SPEC §7.1). */
-export function painLevel(value: number): 'normal' | 'caution' | 'avoid' {
-  if (value >= 5) return 'avoid';
-  if (value >= 3) return 'caution';
-  return 'normal';
-}
-
-/** Apply a pain reading to a joint restriction, returning the next state. */
-export function applyPainToRestrictions(
-  current: RestrictionState,
-  area: PainArea,
-  value: number,
-  side?: JointRestriction['side'],
-): RestrictionState {
-  if (area === 'other') return current; // no joint mapping in the MVP
-  const status: JointRestriction['status'] = value >= 5 ? 'avoid' : value >= 3 ? 'watch' : 'cleared';
-  const joint: JointRestriction = { side, status, lastPain: value };
-  return { ...current, [area]: joint };
-}
-
-const PHASE1_FULLBODY = ['phase1_fullbody_a', 'phase1_fullbody_b', 'phase1_fullbody_c'] as const;
-const PHASE2_BENCH = ['phase2_bench_dumbbell_a', 'phase2_bench_dumbbell_b'] as const;
-const PHASE2_HYBRID = [
-  'phase2_pullup_dumbbell_a',
-  'phase2_bench_dumbbell_a',
-  'phase2_bench_dumbbell_b',
-] as const;
-
-function rotate<T>(items: readonly T[], n: number): T {
-  return items[((n % items.length) + items.length) % items.length] as T;
-}
-
-/** Workout families unlocked by an equipment level (SPEC §7.2). */
-export function enabledWorkoutFamilies(level: EquipmentLevel): string[] {
-  const base = ['phase1_fullbody', 'phase1_legs_core', 'phase1_pull_core', 'recovery'];
-  switch (level) {
-    case 'none':
-    case 'bodyweight':
-      return base;
-    case 'bands':
-      return [...base, 'prehab', 'pull_accessory'];
-    case 'bench':
-    case 'dumbbells':
-      // A bench alone, or dumbbells alone, still trains as bodyweight in the MVP
-      // until paired (bench_dumbbells) — matches the spec's "only if dumbbells exist".
-      return base;
-    case 'bench_dumbbells':
-      return [...base, 'phase2_bench_dumbbell'];
-    case 'pullup_bar':
-      return [...base, 'pull_accessory'];
-    case 'pullup_bar_bench_dumbbells':
-      return [...base, 'phase2_bench_dumbbell', 'phase2_pullup_dumbbell'];
-    case 'home_gym':
-      return [...base, 'prehab', 'pull_accessory', 'phase2_bench_dumbbell', 'phase2_pullup_dumbbell'];
+function place(state: HunterState, results: Partial<Record<GateTest, number>>, legs: { squats?: number | undefined; wallSit?: number | undefined } = {}): void {
+  const clean: Partial<Record<GateTest, number>> = {};
+  for (const t of GATE_TESTS) {
+    const v = results[t];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) clean[t] = v;
+  }
+  for (const [ladder, level] of Object.entries(placementFor(clean, legs)) as [TrackedLadder, number][]) {
+    if (level > state.levels[ladder]) state.levels[ladder] = level;
   }
 }
 
-/**
- * Deterministic workout ID for today. High shoulder pain replaces any push day
- * with legs/core to keep the streak alive; phase 1 rotates bodyweight; phase 2+
- * uses dumbbell families when the equipment is there, else falls back to phase 1.
- */
-export function selectWorkoutId(
-  mission: FitnessMission,
-  phase: TrainingPhase,
-  restrictions: TodayRestriction[],
-): string {
-  const shoulderAvoid = restrictions.some((r) => r.area === 'shoulder' && r.level === 'avoid');
-  if (shoulderAvoid) return 'phase1_legs_core';
+// ---- injuries --------------------------------------------------------------
 
-  const completed = mission.history.filter((w) => w.completed).length;
-
-  if (phase.number === 1) return rotate(PHASE1_FULLBODY, completed);
-
-  const families = enabledWorkoutFamilies(mission.equipment.level);
-  if (families.includes('phase2_pullup_dumbbell')) return rotate(PHASE2_HYBRID, completed);
-  if (families.includes('phase2_bench_dumbbell')) return rotate(PHASE2_BENCH, completed);
-  return rotate(PHASE1_FULLBODY, completed); // phase advanced but no equipment yet
+/** Highest joint stress allowed for an area at this pain level. */
+export function allowedStress(pain: number): number {
+  return pain <= 2 ? 3 : pain <= 4 ? 1 : 0;
 }
 
-/** Trailing consecutive calendar days ending today with a completed workout. */
-export function workoutStreakDays(mission: FitnessMission, today: string): number {
-  const done = new Set(mission.history.filter((w) => w.completed).map((w) => epochDay(w.date)));
-  let day = epochDay(today);
-  let streak = 0;
-  while (done.has(day)) {
-    streak++;
-    day--;
+function worstPain(injuries: Injury[], area: Area): number {
+  return injuries.filter((i) => i.area === area).reduce((m, i) => Math.max(m, i.pain), 0);
+}
+
+/** The injured area that rules an exercise out, or null when it is allowed. */
+export function blockedBy(ex: Exercise, injuries: Injury[]): { area: Area; pain: number } | null {
+  for (const area of AREAS) {
+    const pain = worstPain(injuries, area);
+    if (pain > 0 && (ex.stress[area] ?? 0) > allowedStress(pain)) return { area, pain };
   }
-  return streak;
+  return null;
+}
+
+export function hasEquipment(ex: Exercise, profile: Profile): boolean {
+  switch (ex.equipment) {
+    case 'tower':
+      return profile.equipment.tower;
+    case 'chair':
+      return profile.equipment.chair;
+    default:
+      return true;
+  }
+}
+
+export function reportPain(state: HunterState, today: string, area: Area, side: Side, pain: number, note?: string): { healed: boolean; injury: Injury | null } {
+  const p = Math.max(0, Math.min(10, Math.round(pain)));
+  const i = state.injuries.findIndex((x) => x.area === area && x.side === side);
+  const label = `${side === 'both' ? '' : `${side} `}${area.replace('_', ' ')}`;
+  if (p === 0) {
+    if (i >= 0) {
+      state.injuries.splice(i, 1);
+      event(state, today, 'recovered', `Status effect removed: ${label}. Full training restored for it.`);
+    }
+    return { healed: true, injury: null };
+  }
+  const existing = state.injuries[i];
+  const injury: Injury = { area, side, pain: p, since: existing?.since ?? today, updatedAt: today };
+  if (note) injury.note = note.slice(0, 300);
+  if (i >= 0) state.injuries[i] = injury;
+  else state.injuries.push(injury);
+  const mode = allowedStress(p) === 3 ? 'train normally, stay below pain' : allowedStress(p) === 1 ? 'light work only' : 'rest that area';
+  event(state, today, 'injury', `Status effect: ${label} ${p}/10 — ${mode}.`);
+  return { healed: false, injury };
+}
+
+// ---- quest of the day --------------------------------------------------------
+
+export interface QuestItem {
+  exercise: string;
+  name: string;
+  ladder?: LadderId;
+  kind: 'reps' | 'hold';
+  sets: number;
+  min: number;
+  max: number;
+  perSide: boolean;
+  restSec: number;
+  /** Prescribed reps/seconds per set for today. */
+  target: number[];
+  /** Ladder position: 1-based level and ladder length. */
+  level?: { at: number; of: number };
+  note?: string;
+  /** Sets already logged today. */
+  logged?: number[];
+}
+
+export interface Quest {
+  date: string;
+  type: QuestType;
+  session?: 'A' | 'B';
+  deload: boolean;
+  warmup: QuestItem[];
+  main: QuestItem[];
+  skipped: { ladder: LadderId; reason: string }[];
+  gateTests: GateTest[];
+  done: boolean;
+}
+
+export function isTrainingDay(state: HunterState, date: string): boolean {
+  return state.profile.trainingDays.includes(weekday(date));
+}
+
+export function isDeload(state: HunterState, date: string): boolean {
+  const week = Math.floor(Math.max(0, daysBetween(state.startDate, date)) / 7);
+  return (week + 1) % DELOAD_EVERY_WEEKS === 0;
+}
+
+export function gateTestsFor(profile: Profile): GateTest[] {
+  return profile.equipment.tower ? [...GATE_TESTS] : ['pushups', 'hollow_hold'];
+}
+
+function prescribe(ex: Exercise, state: HunterState, deload: boolean): number[] {
+  const sets = deload ? Math.max(1, ex.sets - 1) : ex.sets;
+  if (deload) return Array.from({ length: sets }, () => ex.min);
+  const last = [...state.logs].reverse().find((l) => l.exercise === ex.id);
+  const stepUp = ex.kind === 'hold' ? 5 : 1;
+  return Array.from({ length: sets }, (_, i) => {
+    const prev = last?.sets[i] ?? last?.sets[last.sets.length - 1];
+    if (prev === undefined) return ex.min;
+    return Math.min(Math.max(prev + stepUp, ex.min), ex.max);
+  });
+}
+
+function item(ex: Exercise, state: HunterState, deload: boolean, date: string, ladder?: LadderId): QuestItem {
+  const q: QuestItem = {
+    exercise: ex.id,
+    name: ex.name,
+    kind: ex.kind,
+    sets: deload ? Math.max(1, ex.sets - 1) : ex.sets,
+    min: ex.min,
+    max: ex.max,
+    perSide: ex.perSide === true,
+    restSec: ex.restSec,
+    target: prescribe(ex, state, deload),
+  };
+  if (ladder) {
+    q.ladder = ladder;
+    const levels = LADDERS[ladder].levels;
+    q.level = { at: levels.indexOf(ex.id) + 1, of: levels.length };
+  }
+  const logged = state.logs.filter((l) => l.date === date && l.exercise === ex.id).at(-1);
+  if (logged) q.logged = logged.sets;
+  return q;
+}
+
+/** Pick today's exercise for a ladder: its level, else easier ones, else its fallback ladder. */
+export function pick(state: HunterState, ladder: LadderId, seen: LadderId[] = []): { ex: Exercise; ladder: LadderId; note?: string } | { skip: string } {
+  const levels = LADDERS[ladder].levels;
+  const current = ladder === 'pull_floor' ? 0 : state.levels[ladder as TrackedLadder];
+  const intended = exercise(levels[Math.min(current, levels.length - 1)]!);
+  let reason = '';
+  for (let i = Math.min(current, levels.length - 1); i >= 0; i--) {
+    const ex = exercise(levels[i]!);
+    if (!hasEquipment(ex, state.profile)) {
+      reason ||= `needs ${ex.equipment === 'tower' ? 'the power tower' : 'a sturdy chair or bench'}`;
+      continue;
+    }
+    const block = blockedBy(ex, state.injuries);
+    if (block) {
+      reason ||= `${block.area.replace('_', ' ')} pain ${block.pain}/10`;
+      continue;
+    }
+    if (ex.id === intended.id) return { ex, ladder };
+    return { ex, ladder, note: `Adjusted (${reason}): ${ex.name} instead of ${intended.name}.` };
+  }
+  const fb = LADDERS[ladder].fallback;
+  if (fb && !seen.includes(fb)) {
+    const alt = pick(state, fb, [...seen, ladder]);
+    if ('ex' in alt) return { ...alt, note: `Adjusted (${reason}): ${alt.ex.name} replaces the ${LADDERS[ladder].name} work today.` };
+  }
+  return { skip: reason || 'not available' };
+}
+
+const SESSION_LADDERS: Record<'A' | 'B', LadderId[]> = {
+  A: ['pull', 'push', 'legs', 'core'],
+  B: ['pull', 'dip', 'hinge', 'lsit', 'legs'],
+};
+
+function usable(state: HunterState, id: string): boolean {
+  const ex = BY_ID.get(id);
+  return !!ex && hasEquipment(ex, state.profile) && blockedBy(ex, state.injuries) === null;
+}
+
+export function questFor(state: HunterState, date: string): Quest {
+  const record = state.quests.find((q) => q.date === date);
+  const deload = isDeload(state, date);
+  const training = isTrainingDay(state, date);
+  const gateDue = training && date >= state.nextGate;
+  const type: QuestType = record?.type ?? (gateDue ? 'gate' : training ? 'training' : 'recovery');
+  const quest: Quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], done: !!record };
+
+  if (type === 'recovery') {
+    quest.main = RECOVERY.filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
+    return quest;
+  }
+  if (type === 'gate') {
+    quest.warmup = [...WARMUP_A, ...WARMUP_B].filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
+    quest.gateTests = gateTestsFor(state.profile);
+    return quest;
+  }
+  const done = state.quests.filter((q) => q.type === 'training' && q.date < date).length;
+  const session = record?.session ?? (done % 2 === 0 ? 'A' : 'B');
+  quest.session = session;
+  quest.warmup = (session === 'A' ? WARMUP_A : WARMUP_B).filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
+  const used = new Set<string>();
+  for (const ladder of SESSION_LADDERS[session]) {
+    let p = pick(state, ladder);
+    if ('skip' in p) {
+      quest.skipped.push({ ladder, reason: p.skip });
+      continue;
+    }
+    // Two ladders can land on the same exercise (e.g. support hold for dips and
+    // L-sit): use the second ladder's fallback instead of repeating it.
+    const fb = LADDERS[ladder].fallback;
+    if (used.has(p.ex.id) && fb) {
+      const alt = pick(state, fb, [ladder]);
+      if ('ex' in alt) p = alt;
+    }
+    if (used.has(p.ex.id)) continue;
+    used.add(p.ex.id);
+    const q = item(p.ex, state, deload, date, p.ladder);
+    if (p.note) q.note = p.note;
+    quest.main.push(q);
+  }
+  return quest;
+}
+
+// ---- logging & progression ---------------------------------------------------
+
+export interface LogResult {
+  exercise: string;
+  sets: number[];
+  unlocked: { ladder: LadderId; from: string; to: string }[];
+  recalibrated: { ladder: LadderId; from: string; to: string }[];
+  hitTop: boolean;
+}
+
+export function logSets(state: HunterState, date: string, exerciseId: string, rawSets: number[]): LogResult {
+  const ex = exercise(exerciseId);
+  const sets = rawSets.map((n) => Math.max(0, Math.round(n))).slice(0, 10);
+  if (sets.length === 0) throw new Error('log at least one set');
+  state.logs.push({ date, exercise: ex.id, sets });
+  if (state.logs.length > MAX_LOGS) state.logs.splice(0, state.logs.length - MAX_LOGS);
+
+  const deload = isDeload(state, date);
+  const required = deload ? Math.max(1, ex.sets - 1) : ex.sets;
+  const hitTop = sets.length >= required && sets.slice(0, required).every((n) => n >= ex.max);
+  const low = sets.filter((n) => n < ex.min).length > sets.length / 2;
+  const s = (state.streaks[ex.id] ??= { top: 0, low: 0 });
+  s.top = hitTop ? s.top + 1 : 0;
+  s.low = low ? s.low + 1 : 0;
+
+  const result: LogResult = { exercise: ex.id, sets, unlocked: [], recalibrated: [], hitTop };
+  for (const ladder of TRACKED_LADDERS) {
+    const levels = LADDERS[ladder].levels;
+    if (levels[state.levels[ladder]] !== ex.id) continue;
+    const at = state.levels[ladder];
+    if (s.top >= 2 && !deload && at < levels.length - 1) {
+      const next = exercise(levels[at + 1]!);
+      state.levels[ladder] = at + 1;
+      state.xp += XP.skill;
+      result.unlocked.push({ ladder, from: ex.id, to: next.id });
+      event(state, date, 'skill_unlocked', `Skill unlocked: ${next.name}. (+${XP.skill} XP)`);
+    } else if (s.low >= 2 && at > 0) {
+      const prev = exercise(levels[at - 1]!);
+      state.levels[ladder] = at - 1;
+      result.recalibrated.push({ ladder, from: ex.id, to: prev.id });
+      event(state, date, 'recalibration', `Recalibrating: back to ${prev.name} to build the base.`);
+    }
+  }
+  if (result.unlocked.length || result.recalibrated.length) state.streaks[ex.id] = { top: 0, low: 0 };
+  return result;
+}
+
+// ---- quests, XP, level, streak ----------------------------------------------------
+
+export function hunterLevel(xp: number): number {
+  return Math.floor((1 + Math.sqrt(1 + (8 * Math.max(0, xp)) / 100)) / 2);
+}
+
+export function xpForLevel(level: number): number {
+  return 50 * level * (level - 1);
+}
+
+function addXp(state: HunterState, date: string, amount: number): void {
+  const before = hunterLevel(state.xp);
+  state.xp += amount;
+  const after = hunterLevel(state.xp);
+  if (after > before) event(state, date, 'level_up', `Level up! You are now level ${after}.`);
+}
+
+export function completeQuest(state: HunterState, date: string): { already: boolean; xp: number; type: QuestType } {
+  const existing = state.quests.find((q) => q.date === date);
+  if (existing) return { already: true, xp: 0, type: existing.type };
+  const quest = questFor(state, date);
+  if (quest.type === 'gate') throw new Error('Today is a Gate: log the test results with plugin_fitness_gate to clear it.');
+  const xp = quest.type === 'training' ? XP.training : XP.recovery;
+  const record: HunterState['quests'][number] = { date, type: quest.type, xp };
+  if (quest.session) record.session = quest.session;
+  state.quests.push(record);
+  if (state.quests.length > MAX_QUESTS) state.quests.splice(0, state.quests.length - MAX_QUESTS);
+  event(state, date, 'quest_complete', `${quest.type === 'training' ? `Daily Quest (Training ${quest.session})` : 'Recovery Quest'} complete. (+${xp} XP)`);
+  addXp(state, date, xp);
+  return { already: false, xp, type: quest.type };
+}
+
+export function streak(state: HunterState, today: string): number {
+  const dates = new Set(state.quests.map((q) => q.date));
+  let day = dates.has(today) ? today : addDays(today, -1);
+  let n = 0;
+  while (dates.has(day)) {
+    n++;
+    day = addDays(day, -1);
+  }
+  return n;
+}
+
+// ---- gates & ranks -------------------------------------------------------------
+
+type Req = { test?: GateTest; min?: number; ladder?: TrackedLadder; level?: string; tower?: boolean };
+
+const RANK_REQS: Record<Exclude<Rank, 'E'>, Req[]> = {
+  D: [{ test: 'pushups', min: 15 }, { test: 'hollow_hold', min: 20 }, { ladder: 'legs', level: 'split_squat' }, { test: 'pullups', min: 3, tower: true }, { test: 'dead_hang', min: 30, tower: true }],
+  C: [{ test: 'pushups', min: 25 }, { test: 'hollow_hold', min: 40 }, { ladder: 'legs', level: 'bulgarian_split_squat' }, { test: 'pullups', min: 8, tower: true }, { test: 'dips', min: 8, tower: true }, { test: 'dead_hang', min: 45, tower: true }],
+  B: [{ test: 'pushups', min: 35 }, { ladder: 'legs', level: 'assisted_pistol' }, { test: 'pullups', min: 12 }, { test: 'dips', min: 15 }, { test: 'dead_hang', min: 60 }, { test: 'l_sit', min: 10 }, { ladder: 'core', level: 'hanging_knee_raise' }],
+  A: [{ test: 'pushups', min: 45 }, { ladder: 'legs', level: 'pistol_squat' }, { test: 'pullups', min: 16 }, { test: 'dips', min: 22 }, { test: 'l_sit', min: 20 }, { ladder: 'pull', level: 'chest_to_bar' }, { ladder: 'core', level: 'hanging_leg_raise' }],
+  S: [{ test: 'pushups', min: 50 }, { ladder: 'legs', level: 'pistol_squat' }, { test: 'pullups', min: 20 }, { test: 'dips', min: 30 }, { test: 'l_sit', min: 30 }, { ladder: 'pull', level: 'archer_pullup' }, { ladder: 'push', level: 'pseudo_planche_pushup' }],
+};
+
+function meets(state: HunterState, req: Req): boolean {
+  // Without the tower, tower-only requirements of the low ranks are waived; B and up need it.
+  if (req.tower && !state.profile.equipment.tower) return true;
+  if (req.test) return (state.best[req.test] ?? 0) >= (req.min ?? 0);
+  if (req.ladder && req.level) return state.levels[req.ladder] >= LADDERS[req.ladder].levels.indexOf(req.level);
+  return true;
+}
+
+export function rankFor(state: HunterState): Rank {
+  let rank: Rank = 'E';
+  for (const r of RANKS.slice(1) as Exclude<Rank, 'E'>[]) {
+    if (RANK_REQS[r].every((req) => meets(state, req))) rank = r;
+    else break;
+  }
+  return rank;
+}
+
+/** What still stands between the hunter and the next rank. */
+export function nextRankNeeds(state: HunterState): { rank: Rank; missing: string[] } | null {
+  const i = RANKS.indexOf(state.rank);
+  const next = RANKS[i + 1] as Exclude<Rank, 'E'> | undefined;
+  if (!next) return null;
+  const missing = RANK_REQS[next].filter((req) => !meets(state, req)).map((req) =>
+    req.test ? `${TEST_LABEL[req.test]} ≥ ${req.min}${req.test === 'dead_hang' || req.test === 'hollow_hold' || req.test === 'l_sit' ? ' s' : ''}` : `${LADDERS[req.ladder!].name}: reach ${exercise(req.level!).name}`,
+  );
+  return { rank: next, missing };
+}
+
+export const TEST_LABEL: Record<GateTest, string> = {
+  pullups: 'Pull-ups (max, strict)',
+  pushups: 'Push-ups (max, strict)',
+  dips: 'Dips (max)',
+  dead_hang: 'Dead hang (seconds)',
+  hollow_hold: 'Hollow hold (seconds)',
+  l_sit: 'L-sit or tuck L-sit (seconds)',
+};
+
+export function clearGate(state: HunterState, date: string, results: Partial<Record<GateTest, number>>): { number: number; rankBefore: Rank; rankAfter: Rank; placed: Partial<Record<TrackedLadder, { from: string; to: string }>> } {
+  const clean: Partial<Record<GateTest, number>> = {};
+  for (const t of GATE_TESTS) {
+    const v = results[t];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) clean[t] = Math.round(v);
+  }
+  if (Object.keys(clean).length === 0) throw new Error('log at least one test result');
+  const before = { ...state.levels };
+  place(state, clean);
+  for (const [t, v] of Object.entries(clean) as [GateTest, number][]) state.best[t] = Math.max(state.best[t] ?? 0, v);
+
+  const rankBefore = state.rank;
+  const computed = rankFor(state);
+  if (RANKS.indexOf(computed) > RANKS.indexOf(state.rank)) state.rank = computed;
+  const number = state.gates.length + 1;
+  state.gates.push({ date, number, results: clean, rankBefore, rankAfter: state.rank });
+  state.nextGate = addDays(date, GATE_EVERY_DAYS);
+
+  const placed: Partial<Record<TrackedLadder, { from: string; to: string }>> = {};
+  for (const l of TRACKED_LADDERS) {
+    if (state.levels[l] !== before[l]) placed[l] = { from: LADDERS[l].levels[before[l]]!, to: LADDERS[l].levels[state.levels[l]]! };
+  }
+
+  if (!state.quests.some((q) => q.date === date)) {
+    state.quests.push({ date, type: 'gate', xp: XP.gate });
+  }
+  event(state, date, 'gate_cleared', `Gate ${number} cleared. (+${XP.gate} XP)`);
+  addXp(state, date, XP.gate);
+  if (state.rank !== rankBefore) {
+    event(state, date, 'rank_up', `Rank up! ${rankBefore} → ${state.rank}. (+${XP.rank} XP)`);
+    addXp(state, date, XP.rank);
+  }
+  return { number, rankBefore, rankAfter: state.rank, placed };
+}
+
+// ---- stats ----------------------------------------------------------------------
+
+export interface Stats {
+  STR: number;
+  AGI: number;
+  VIT: number;
+  END: number;
+}
+
+export function stats(state: HunterState, today: string): Stats {
+  const l = state.levels;
+  const b = state.best;
+  const recent = state.quests.filter((q) => daysBetween(q.date, today) < 28).length;
+  const trainings = state.quests.filter((q) => q.type !== 'recovery').length;
+  return {
+    STR: 10 + 4 * l.pull + 3 * l.push + 4 * l.dip + (b.pullups ?? 0) + Math.floor((b.pushups ?? 0) / 3) + Math.floor((b.dips ?? 0) / 2),
+    AGI: 10 + 4 * l.core + 6 * l.lsit + Math.floor((b.hollow_hold ?? 0) / 5) + Math.floor((b.l_sit ?? 0) / 2),
+    VIT: 10 + 5 * l.legs + 4 * l.hinge + Math.floor(trainings / 4),
+    END: 10 + Math.floor((b.dead_hang ?? 0) / 3) + 2 * recent + 2 * Math.floor(streak(state, today) / 7),
+  };
+}
+
+// ---- profile -----------------------------------------------------------------------
+
+export type ProfilePatch = Partial<Omit<Profile, 'equipment'>> & { tower?: boolean; chair?: boolean; waistCm?: number };
+
+export function updateProfile(state: HunterState, today: string, patch: ProfilePatch): string[] {
+  const changed: string[] = [];
+  const p = state.profile;
+  const set = <K extends keyof Profile>(field: K, value: Profile[K] | undefined): void => {
+    if (value === undefined || JSON.stringify(p[field]) === JSON.stringify(value)) return;
+    state.profileHistory.push({ date: today, field, from: p[field], to: value });
+    p[field] = value;
+    changed.push(field);
+  };
+  set('name', patch.name);
+  set('age', patch.age);
+  set('heightCm', patch.heightCm);
+  set('weightKg', patch.weightKg);
+  set('trainingDays', patch.trainingDays);
+  set('questTime', patch.questTime);
+  set('eveningWarning', patch.eveningWarning);
+  set('timezone', patch.timezone);
+
+  for (const key of ['tower', 'chair'] as const) {
+    const v = patch[key];
+    if (v === undefined || p.equipment[key] === v) continue;
+    state.profileHistory.push({ date: today, field: `equipment.${key}`, from: p.equipment[key], to: v });
+    p.equipment = { ...p.equipment, [key]: v };
+    changed.push(`equipment.${key}`);
+    if (key === 'tower' && v) {
+      // New equipment unlocks new tests: open a Gate on the next training day.
+      state.nextGate = today;
+      event(state, today, 'equipment', 'New equipment detected: power tower. A Gate will open on your next training day.');
+    }
+  }
+
+  if (patch.weightKg !== undefined || patch.waistCm !== undefined) {
+    const entry = state.body.find((b) => b.date === today) ?? { date: today };
+    if (patch.weightKg !== undefined) entry.weightKg = patch.weightKg;
+    if (patch.waistCm !== undefined) entry.waistCm = patch.waistCm;
+    if (!state.body.includes(entry)) state.body.push(entry);
+    if (patch.waistCm !== undefined && !changed.includes('waistCm')) changed.push('waistCm');
+  }
+  if (state.profileHistory.length > MAX_HISTORY) state.profileHistory.splice(0, state.profileHistory.length - MAX_HISTORY);
+  return changed;
+}
+
+// ---- events ----------------------------------------------------------------------------
+
+export function event(state: HunterState, date: string, kind: SystemEvent['kind'], text: string): void {
+  state.events.push({ date, kind, text });
+  if (state.events.length > MAX_EVENTS) state.events.splice(0, state.events.length - MAX_EVENTS);
+}
+
+// ---- parsing helpers (tool input) ---------------------------------------------------------
+
+const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/** "mon,wed,fri" | "1,3,5" | [1,3,5] → sorted unique weekdays. */
+export function parseDays(v: unknown): number[] | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  const parts = Array.isArray(v) ? v : String(v).split(/[\s,;/]+/);
+  const days = new Set<number>();
+  for (const part of parts) {
+    const s = String(part).trim().toLowerCase();
+    if (!s) continue;
+    const n = /^\d$/.test(s) ? Number(s) % 7 : DAY_NAMES.indexOf(s.slice(0, 3));
+    if (n < 0) throw new Error(`unknown day '${String(part)}' — use mon,tue,… or 0-6 (0 = Sunday)`);
+    days.add(n);
+  }
+  if (days.size === 0) throw new Error('pick at least one training day');
+  return [...days].sort((a, b) => a - b);
+}
+
+export function formatDays(days: number[]): string {
+  return days.map((d) => DAY_NAMES[d]!.replace(/^./, (c) => c.toUpperCase())).join(', ');
+}
+
+export function parseTime(v: unknown): string | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  const m = /^(\d{1,2})[:.](\d{2})$/.exec(String(v).trim());
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error(`time '${String(v)}' must look like 10:30`);
+  return `${m[1]!.padStart(2, '0')}:${m[2]}`;
 }

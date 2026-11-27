@@ -7,7 +7,7 @@ on:
 
 jobs:
   fitness:
-    name: "@shinobi/plugin-fitness — build + test"
+    name: "shinobi-plugin-fitness — build + test + bundle up to date"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,6 +20,8 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm test
+      # The catalog installs standalone/ straight from main: it must match src/.
+      - run: npm run bundle && git diff --exit-code -- standalone/
 
   music:
     name: "shinobi-plugin-music — test"
