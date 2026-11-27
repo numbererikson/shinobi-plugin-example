@@ -125,7 +125,8 @@ function startBlocks(state: HunterState, today: string): Block[] {
         badge: m.level ? `Lv ${m.level.at}/${m.level.of}` : '',
         tone: m.note ? 'warn' : 'default',
       }));
-  const minutes = q.type === 'recovery' ? 10 : q.type === 'gate' ? 25 : 10 + q.main.reduce((s, m) => s + Math.round((m.sets * (m.restSec + 40)) / 60), 0);
+  // Gate: about a minute per warm-up move, three per trial (one all-out set + full rest).
+  const minutes = q.type === 'recovery' ? 10 : q.type === 'gate' ? q.warmup.length + 3 * q.gateTests.length : 10 + q.main.reduce((s, m) => s + Math.round((m.sets * (m.restSec + 40)) / 60), 0);
   const blocks: Block[] = [
     { type: 'heading', text: title },
     { type: 'text', text: q.type === 'gate' ? T.gateIntro : q.type === 'training' ? T.trainingIntro : T.recoveryIntro },
