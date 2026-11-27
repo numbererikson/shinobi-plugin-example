@@ -25,6 +25,7 @@ import {
   streak,
   TEST_LABEL,
   weekPlan,
+  XP,
   xpForLevel,
 } from './rules.js';
 import { T } from './text.js';
@@ -139,12 +140,35 @@ function startBlocks(state: HunterState, today: string): Block[] {
   if (q.skipped.length) {
     blocks.push({ type: 'list', items: q.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} rests today`, subtitle: x.reason, tone: 'warn' })) });
   }
-  blocks.push({ type: 'actions', buttons: [{ label: q.type === 'gate' ? '▶  ENTER THE GATE' : '▶  START QUEST', tool: 'plugin_fitness_start', variant: 'primary' }] });
+  if (q.sideQuestName && q.sideQuest.length) {
+    blocks.push({
+      type: 'list',
+      items: [
+        { title: `Side Quest: ${q.sideQuestName}`, subtitle: 'gentle care after the main work, pain-free range only', badge: `+${XP.sideQuest} XP`, tone: 'ok' },
+        ...q.sideQuest.map((m) => ({ title: m.name, subtitle: `${m.target[0]} ${m.kind === 'hold' ? 's' : 'reps'}${m.perSide ? ' per side' : ''}`, tone: 'muted' })),
+      ],
+    });
+  }
+  if (q.type === 'gate') {
+    blocks.push({ type: 'actions', buttons: [{ label: '▶  ENTER THE GATE', tool: 'plugin_fitness_start', variant: 'primary' }] });
+  } else {
+    // Readiness check: poor sleep or heavy soreness turns training into a light day.
+    blocks.push({
+      type: 'form',
+      title: 'Quick check before you start',
+      tool: 'plugin_fitness_start',
+      button: '▶  START QUEST',
+      fields: [
+        { name: 'sleep', label: 'How did you sleep?', kind: 'select', value: 'good', options: [{ value: 'good', label: 'Well' }, { value: 'ok', label: 'So-so' }, { value: 'poor', label: 'Badly' }] },
+        { name: 'soreness', label: 'Sore muscles?', kind: 'select', value: 'none', options: [{ value: 'none', label: 'No' }, { value: 'some', label: 'A little' }, { value: 'heavy', label: 'A lot' }] },
+      ],
+    });
+  }
   return blocks;
 }
 
 function stepLabel(s: SessionStep): string {
-  return s.kind === 'warmup' ? 'Warm-up' : s.kind === 'trial' ? 'Gate trial' : s.kind === 'recovery' ? 'Mobility' : 'Exercise';
+  return s.kind === 'warmup' ? 'Warm-up' : s.kind === 'trial' ? 'Gate trial' : s.kind === 'recovery' ? 'Mobility' : s.kind === 'rehab' ? 'Side quest' : 'Exercise';
 }
 
 function runningBlocks(a: ActiveSession, now: Date): PageRender {
@@ -156,6 +180,7 @@ function runningBlocks(a: ActiveSession, now: Date): PageRender {
     { type: 'heading', text: `${questTitle(a.type, a.session)} — step ${a.cursor + 1} of ${a.steps.length}` },
     { type: 'progress', label: `${doneSets} of ${totalSets} sets`, value: doneSets, max: totalSets },
   ];
+  if (a.light) blocks.push({ type: 'text', tone: 'warn', text: `Light day (${a.light}): one set fewer, bottom of the range. Showing up still counts.` });
   const rest = restLeft(a, now);
   const setNo = step.done.length + 1;
   const target = step.target[step.done.length] ?? step.target[step.target.length - 1];
@@ -194,6 +219,10 @@ function runningBlocks(a: ActiveSession, now: Date): PageRender {
         unit: unitOf(ex),
         ...(step.kind === 'trial' ? { required: true } : { value: target }),
       },
+      // Last set of an exercise: how did it feel? Steers the next target.
+      ...(step.kind === 'work' && setNo === step.sets
+        ? [{ name: 'feel', label: 'How did this exercise feel?', kind: 'select', value: 'ok', options: [{ value: 'ok', label: 'Just right' }, { value: 'easy', label: 'Too easy' }, { value: 'hard', label: 'Too hard' }] }]
+        : []),
     ],
   });
   blocks.push({
@@ -236,12 +265,25 @@ function completeBlocks(state: HunterState, a: ActiveSession, today: string): Bl
     ],
   });
   const items = [
+    ...(f.sideQuest ? [{ title: `Side quest complete: ${f.sideQuest}`, badge: `+${XP.sideQuest} XP`, tone: 'ok' }] : []),
     ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: 'new', tone: 'ok' })),
     ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: 'build the base, then climb again', tone: 'warn' })),
     ...f.logged.map((l) => ({ title: exercise(l.exercise).name, subtitle: l.sets.join(' · ') })),
     ...f.skipped.map((n) => ({ title: `${n} — skipped`, tone: 'muted' })),
   ];
   if (items.length) blocks.push({ type: 'list', items });
+  // Pain check: one slider per status effect, pre-set to the last value.
+  for (const i of state.injuries) {
+    const where = `${i.side === 'both' ? '' : `${i.side} `}${i.area.replace('_', ' ')}`;
+    blocks.push({
+      type: 'form',
+      title: `How does your ${where} feel now?`,
+      tool: 'plugin_fitness_pain',
+      button: 'Update',
+      args: { area: i.area, side: i.side },
+      fields: [{ name: 'pain', label: 'Pain (0 = gone)', kind: 'slider', min: 0, max: 10, value: i.pain, unit: '/10', hint: `It was ${i.pain}/10. At 2 or less the full exercises come back.` }],
+    });
+  }
   const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
   blocks.push({ type: 'text', text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? 'Recovery'}.` });
   return blocks;
@@ -376,6 +418,26 @@ function historyBlocks(state: HunterState, today: string): Block[] {
   });
   if (volume.some((v) => v > 0)) {
     blocks.push({ type: 'chart', kind: 'bar', title: 'Reps per week', labels: weeks.map((w) => w.slice(5)), series: [{ name: 'Reps', values: volume }] });
+  }
+  // Pain over time, one line per area/side (max 4).
+  const pains = (state.painLog ?? []).slice(-120);
+  if (pains.length >= 2) {
+    const dates = [...new Set(pains.map((p) => p.date))].sort().slice(-60);
+    const keys = [...new Set(pains.map((p) => `${p.side === 'both' ? '' : `${p.side} `}${p.area.replace('_', ' ')}`))].slice(0, 4);
+    blocks.push({
+      type: 'chart',
+      kind: 'line',
+      title: 'Pain',
+      unit: '/10',
+      labels: dates.map((d) => d.slice(5)),
+      series: keys.map((k) => ({
+        name: k,
+        values: dates.map((d) => {
+          const e = pains.filter((p) => p.date === d && `${p.side === 'both' ? '' : `${p.side} `}${p.area.replace('_', ' ')}` === k).at(-1);
+          return e ? e.pain : null;
+        }),
+      })),
+    });
   }
   const body = state.body.filter((b) => b.weightKg !== undefined).slice(-60);
   if (body.length >= 2) {

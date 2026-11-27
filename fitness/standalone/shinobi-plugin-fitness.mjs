@@ -824,6 +824,50 @@ var EXERCISES = [
       move: 1
     }
   },
+  // ---------- shoulder care (rehab side quest) ----------
+  {
+    id: "side_lying_external_rotation",
+    name: "Side-Lying External Rotation",
+    kind: "reps",
+    sets: 1,
+    min: 12,
+    max: 15,
+    perSide: true,
+    restSec: 0,
+    equipment: "none",
+    stress: { shoulder: 1 },
+    cues: ["Lie on your side, top elbow bent 90\xB0 and tucked against your ribs (a rolled towel under it helps).", "Keep the elbow glued to your side and rotate the forearm up towards the ceiling.", "Lower slowly. Small, smooth and completely pain-free."],
+    mistake: "Letting the elbow lift off the body \u2014 then the shoulder does the wrong job.",
+    figure: {
+      props: [floor],
+      keys: [
+        { pose: { torso: -90, neck: -96, armN: [94, 66], armF: [-96, -96], legN: [82, 100], legF: [84, 102], anchor: { joint: "hip", at: at(118, GROUND - 12) } }, hold: 0.3 },
+        { pose: { torso: -90, neck: -96, armN: [94, 172], armF: [-96, -96], legN: [82, 100], legF: [84, 102], anchor: { joint: "hip", at: at(118, GROUND - 12) } }, hold: 0.6 }
+      ],
+      move: 1.4
+    }
+  },
+  {
+    id: "scapular_pushup",
+    name: "Scapular Push-up",
+    kind: "reps",
+    sets: 1,
+    min: 10,
+    max: 15,
+    restSec: 0,
+    equipment: "none",
+    stress: { shoulder: 1, wrist: 1 },
+    cues: ["Top of a push-up (or on your knees), arms locked straight.", "Let the chest sink a little so the shoulder blades come together.", "Push the floor away so they spread apart \u2014 arms never bend."],
+    mistake: "Bending the elbows; the whole movement is in the shoulder blades.",
+    figure: {
+      props: [floor, { kind: "arrow", from: at(128, 128), to: at(128, 110) }],
+      keys: [
+        { pose: plank(111, at(30, FOOT_Y - 8), at(148, FLOOR_HAND)), hold: 0.4 },
+        { pose: plank(114, at(30, FOOT_Y - 8), at(148, FLOOR_HAND)), hold: 0.6 }
+      ],
+      move: 1
+    }
+  },
   // ---------- dip ----------
   {
     id: "support_hold",
@@ -1163,6 +1207,22 @@ var TRACKED_LADDERS = ["pull", "dip", "push", "legs", "hinge", "core", "lsit"];
 var WARMUP_A = ["cat_cow", "wall_slide"];
 var WARMUP_B = ["deep_squat_hold", "hip_flexor_stretch"];
 var RECOVERY = ["cat_cow", "wall_slide", "deep_squat_hold", "hip_flexor_stretch", "forward_fold", "dead_hang"];
+var REHAB = {
+  shoulder: ["wall_slide", "prone_y_raise", "side_lying_external_rotation", "scapular_pushup"],
+  lower_back: ["cat_cow", "dead_bug", "glute_bridge"],
+  hip: ["glute_bridge", "cat_cow", "hip_flexor_stretch"],
+  knee: ["glute_bridge", "dead_bug"]
+};
+var REHAB_MAX_PAIN = 6;
+var REHAB_NAME = {
+  shoulder: "Repair the shoulder",
+  elbow: "Repair the elbow",
+  wrist: "Repair the wrist",
+  lower_back: "Repair the lower back",
+  hip: "Repair the hip",
+  knee: "Repair the knee",
+  ankle: "Repair the ankle"
+};
 
 // src/types.ts
 var RANKS = ["E", "D", "C", "B", "A", "S"];
@@ -1170,7 +1230,7 @@ var GATE_TESTS = ["pullups", "pushups", "dips", "dead_hang", "hollow_hold", "l_s
 var STATE_KEY = "hunter";
 
 // src/rules.ts
-var XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500 };
+var XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20 };
 var GATE_EVERY_DAYS = 42;
 var DELOAD_EVERY_WEEKS = 5;
 var MAX_LOGS = 3e3;
@@ -1216,7 +1276,7 @@ function newHunter(profile, today, baseline = {}) {
     dead_hang: baseline.deadHang,
     hollow_hold: baseline.hollowHold,
     l_sit: baseline.lSit
-  }, { squats: baseline.squats, wallSit: baseline.wallSit });
+  }, { squats: baseline.squats, wallSit: baseline.wallSit }, 1);
   event(state, today, "awakening", "You have been chosen. The System is now active.");
   return state;
 }
@@ -1242,13 +1302,14 @@ function placementFor(results, legs = {}) {
   }
   return out;
 }
-function place(state, results, legs = {}) {
+function place(state, results, legs = {}, caution = 0) {
   const clean = {};
   for (const t of GATE_TESTS) {
     const v = results[t];
     if (typeof v === "number" && Number.isFinite(v) && v >= 0) clean[t] = v;
   }
-  for (const [ladder, level] of Object.entries(placementFor(clean, legs))) {
+  for (const [ladder, raw] of Object.entries(placementFor(clean, legs))) {
+    const level = Math.max(0, raw - caution);
     if (level > state.levels[ladder]) state.levels[ladder] = level;
   }
 }
@@ -1277,6 +1338,11 @@ function hasEquipment(ex, profile) {
 }
 function reportPain(state, today, area, side, pain, note) {
   const p = Math.max(0, Math.min(10, Math.round(pain)));
+  const log = state.painLog ??= [];
+  const same = log.findIndex((e) => e.date === today && e.area === area && e.side === side);
+  if (same >= 0) log.splice(same, 1);
+  log.push({ date: today, area, side, pain: p });
+  if (log.length > MAX_HISTORY) log.splice(0, log.length - MAX_HISTORY);
   const i = state.injuries.findIndex((x) => x.area === area && x.side === side);
   const label = `${side === "both" ? "" : `${side} `}${area.replace("_", " ")}`;
   if (p === 0) {
@@ -1294,6 +1360,24 @@ function reportPain(state, today, area, side, pain, note) {
   const mode = allowedStress(p) === 3 ? "train normally, stay below pain" : allowedStress(p) === 1 ? "light work only" : "rest that area";
   event(state, today, "injury", `Status effect: ${label} ${p}/10 \u2014 ${mode}.`);
   return { healed: false, injury };
+}
+function sideQuestFor(state, exclude) {
+  const areas = AREAS.filter((a) => REHAB[a] && state.injuries.some((i) => i.area === a && i.pain >= 1 && i.pain <= REHAB_MAX_PAIN));
+  const ids = [];
+  for (const a of areas) {
+    for (const id of REHAB[a]) {
+      if (ids.includes(id) || exclude.has(id)) continue;
+      const ex = exercise(id);
+      if (!hasEquipment(ex, state.profile)) continue;
+      const ok = AREAS.every((area) => {
+        const pain = worstPain(state.injuries, area);
+        const s = ex.stress[area] ?? 0;
+        return pain === 0 || s === 0 || s <= 1 && pain <= REHAB_MAX_PAIN;
+      });
+      if (ok) ids.push(id);
+    }
+  }
+  return { name: areas.length ? REHAB_NAME[areas[0]] + (areas.length > 1 ? ` (+${areas.length - 1})` : "") : null, ids };
 }
 function isTrainingDay(state, date) {
   return state.profile.trainingDays.includes(weekday(date));
@@ -1321,7 +1405,8 @@ function prescribe(ex, state, deload) {
   const sets = deload ? Math.max(1, ex.sets - 1) : ex.sets;
   if (deload) return Array.from({ length: sets }, () => ex.min);
   const last = [...state.logs].reverse().find((l) => l.exercise === ex.id);
-  const stepUp = ex.kind === "hold" ? 5 : 1;
+  const unit = ex.kind === "hold" ? 5 : 1;
+  const stepUp = last?.feel === "easy" ? 2 * unit : last?.feel === "hard" ? 0 : unit;
   return Array.from({ length: sets }, (_, i) => {
     const prev = last?.sets[i] ?? last?.sets[last.sets.length - 1];
     if (prev === void 0) return ex.min;
@@ -1389,9 +1474,16 @@ function questFor(state, date) {
   const training = isTrainingDay(state, date);
   const gateDue = training && date >= state.nextGate && gateTestsFor(state).length > 0;
   const type = record?.type ?? (gateDue ? "gate" : training ? "training" : "recovery");
-  const quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], done: !!record };
+  const quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], sideQuest: [], sideQuestName: null, done: !!record };
+  const addSideQuest = () => {
+    const used2 = new Set([...quest.warmup, ...quest.main].map((q) => q.exercise));
+    const sq = sideQuestFor(state, used2);
+    quest.sideQuestName = sq.ids.length ? sq.name : null;
+    quest.sideQuest = sq.ids.map((id) => item(exercise(id), state, false, date));
+  };
   if (type === "recovery") {
     quest.main = RECOVERY.filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
+    addSideQuest();
     return quest;
   }
   if (type === "gate") {
@@ -1421,13 +1513,14 @@ function questFor(state, date) {
     if (p.note) q.note = p.note;
     quest.main.push(q);
   }
+  addSideQuest();
   return quest;
 }
-function logSets(state, date, exerciseId, rawSets) {
+function logSets(state, date, exerciseId, rawSets, feel) {
   const ex = exercise(exerciseId);
   const sets = rawSets.map((n) => Math.max(0, Math.round(n))).slice(0, 10);
   if (sets.length === 0) throw new Error("log at least one set");
-  state.logs.push({ date, exercise: ex.id, sets });
+  state.logs.push(feel ? { date, exercise: ex.id, sets, feel } : { date, exercise: ex.id, sets });
   if (state.logs.length > MAX_LOGS) state.logs.splice(0, state.logs.length - MAX_LOGS);
   const deload = isDeload(state, date);
   const required = deload ? Math.max(1, ex.sets - 1) : ex.sets;
@@ -1702,38 +1795,50 @@ function parseTime(v) {
 
 // src/session.ts
 var TRIAL_REST = 120;
-var stepOf = (q, kind) => {
+function lightReason(r) {
+  const why = [];
+  if (r.sleep === "poor") why.push("poor sleep");
+  if (r.soreness === "heavy") why.push("heavy soreness");
+  return why.length ? why.join(" and ") : null;
+}
+var stepOf = (q, kind, light) => {
+  const work = kind === "work";
+  const sets = work ? light ? Math.max(1, q.sets - 1) : q.sets : 1;
   const s = {
     kind,
     exercise: q.exercise,
-    sets: kind === "work" ? q.sets : 1,
-    target: kind === "work" ? q.target : [q.target[0] ?? q.min],
+    sets,
+    target: work ? light ? Array.from({ length: sets }, () => q.min) : q.target : [q.target[0] ?? q.min],
     done: [],
-    restSec: kind === "work" ? q.restSec : 0
+    restSec: work ? q.restSec : 0
   };
   if (q.ladder) s.ladder = q.ladder;
   if (q.note) s.note = q.note;
   return s;
 };
-function startSession(state, date, now) {
+function startSession(state, date, now, readiness = {}) {
   const a = state.active;
   if (a && a.date === date) {
-    if (a.finished) throw new Error("Today's quest is already finished.");
-    return a;
+    if (a.finished && a.finished.outcome !== "abandoned") throw new Error("Today's quest is already finished.");
+    if (!a.finished) return a;
   }
   const quest = questFor(state, date);
   if (quest.done) throw new Error("Today's quest is already complete.");
-  const steps = quest.warmup.map((w) => stepOf(w, "warmup"));
+  const light = quest.type === "training" ? lightReason(readiness) : null;
+  const steps = quest.warmup.map((w) => stepOf(w, "warmup", false));
   if (quest.type === "gate") {
     for (const t of quest.gateTests) {
       steps.push({ kind: "trial", exercise: TEST_EXERCISE[t], test: t, sets: 1, target: [], done: [], restSec: TRIAL_REST });
     }
   } else {
-    for (const m of quest.main) steps.push(stepOf(m, quest.type === "recovery" ? "recovery" : "work"));
+    for (const m of quest.main) steps.push(stepOf(m, quest.type === "recovery" ? "recovery" : "work", !!light));
+    for (const r of quest.sideQuest) steps.push(stepOf(r, "rehab", false));
   }
   if (steps.length === 0) throw new Error("Nothing to do today with the current equipment and injuries.");
   const session = { date, type: quest.type, steps, cursor: 0, startedAt: now.toISOString() };
   if (quest.session) session.session = quest.session;
+  if (light) session.light = light;
+  if (quest.type !== "gate" && quest.sideQuest.length && quest.sideQuestName) session.sideQuest = quest.sideQuestName;
   state.active = session;
   return session;
 }
@@ -1766,10 +1871,11 @@ function advance(state, a, date, now, rest) {
   }
   startRest(a, now, rest);
 }
-function recordSet(state, date, now, value) {
+function recordSet(state, date, now, value, feel) {
   const a = running(state, date);
   const step2 = a.steps[a.cursor];
   step2.done.push(Math.max(0, Math.round(value)));
+  if (feel && step2.kind === "work") step2.feel = feel;
   if (step2.done.length < step2.sets) startRest(a, now, step2.restSec);
   else advance(state, a, date, now, step2.restSec);
   return a;
@@ -1824,14 +1930,23 @@ function finish(state, a, date, now) {
   } else {
     const work = a.steps.filter((s) => s.kind === "work" && s.done.length > 0);
     for (const s of work) {
-      const r = logSets(state, date, s.exercise, s.done);
+      const r = logSets(state, date, s.exercise, s.done, s.feel);
       summary.logged.push({ exercise: s.exercise, sets: s.done });
       summary.unlocked.push(...r.unlocked.map((u) => exercise(u.to).name));
       summary.recalibrated.push(...r.recalibrated.map((u) => exercise(u.to).name));
     }
-    const didSomething = a.type === "recovery" ? a.steps.some((s) => s.done.length > 0) : work.length > 0;
-    if (didSomething) completeQuest(state, date);
-    else summary.outcome = "abandoned";
+    const rehabDone = a.steps.some((s) => s.kind === "rehab" && s.done.length > 0);
+    const didSomething = a.type === "recovery" ? a.steps.some((s) => s.kind === "recovery" && s.done.length > 0) || rehabDone : work.length > 0;
+    if (didSomething) {
+      completeQuest(state, date);
+      if (rehabDone && a.sideQuest) {
+        event(state, date, "quest_complete", `Side quest complete: ${a.sideQuest}. (+${XP.sideQuest} XP)`);
+        addXp(state, date, XP.sideQuest);
+        summary.sideQuest = a.sideQuest;
+      }
+    } else {
+      summary.outcome = "abandoned";
+    }
   }
   summary.xp = state.xp - xpBefore;
   summary.levelAfter = hunterLevel(state.xp);
@@ -1948,11 +2063,33 @@ Tomorrow: ${next?.label ?? "Recovery"}.` }
   if (q.skipped.length) {
     blocks.push({ type: "list", items: q.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} rests today`, subtitle: x.reason, tone: "warn" })) });
   }
-  blocks.push({ type: "actions", buttons: [{ label: q.type === "gate" ? "\u25B6  ENTER THE GATE" : "\u25B6  START QUEST", tool: "plugin_fitness_start", variant: "primary" }] });
+  if (q.sideQuestName && q.sideQuest.length) {
+    blocks.push({
+      type: "list",
+      items: [
+        { title: `Side Quest: ${q.sideQuestName}`, subtitle: "gentle care after the main work, pain-free range only", badge: `+${XP.sideQuest} XP`, tone: "ok" },
+        ...q.sideQuest.map((m) => ({ title: m.name, subtitle: `${m.target[0]} ${m.kind === "hold" ? "s" : "reps"}${m.perSide ? " per side" : ""}`, tone: "muted" }))
+      ]
+    });
+  }
+  if (q.type === "gate") {
+    blocks.push({ type: "actions", buttons: [{ label: "\u25B6  ENTER THE GATE", tool: "plugin_fitness_start", variant: "primary" }] });
+  } else {
+    blocks.push({
+      type: "form",
+      title: "Quick check before you start",
+      tool: "plugin_fitness_start",
+      button: "\u25B6  START QUEST",
+      fields: [
+        { name: "sleep", label: "How did you sleep?", kind: "select", value: "good", options: [{ value: "good", label: "Well" }, { value: "ok", label: "So-so" }, { value: "poor", label: "Badly" }] },
+        { name: "soreness", label: "Sore muscles?", kind: "select", value: "none", options: [{ value: "none", label: "No" }, { value: "some", label: "A little" }, { value: "heavy", label: "A lot" }] }
+      ]
+    });
+  }
   return blocks;
 }
 function stepLabel(s) {
-  return s.kind === "warmup" ? "Warm-up" : s.kind === "trial" ? "Gate trial" : s.kind === "recovery" ? "Mobility" : "Exercise";
+  return s.kind === "warmup" ? "Warm-up" : s.kind === "trial" ? "Gate trial" : s.kind === "recovery" ? "Mobility" : s.kind === "rehab" ? "Side quest" : "Exercise";
 }
 function runningBlocks(a, now) {
   const step2 = a.steps[a.cursor];
@@ -1963,6 +2100,7 @@ function runningBlocks(a, now) {
     { type: "heading", text: `${questTitle(a.type, a.session)} \u2014 step ${a.cursor + 1} of ${a.steps.length}` },
     { type: "progress", label: `${doneSets} of ${totalSets} sets`, value: doneSets, max: totalSets }
   ];
+  if (a.light) blocks.push({ type: "text", tone: "warn", text: `Light day (${a.light}): one set fewer, bottom of the range. Showing up still counts.` });
   const rest = restLeft(a, now);
   const setNo = step2.done.length + 1;
   const target = step2.target[step2.done.length] ?? step2.target[step2.target.length - 1];
@@ -1995,7 +2133,9 @@ function runningBlocks(a, now) {
         max: 900,
         unit: unitOf(ex),
         ...step2.kind === "trial" ? { required: true } : { value: target }
-      }
+      },
+      // Last set of an exercise: how did it feel? Steers the next target.
+      ...step2.kind === "work" && setNo === step2.sets ? [{ name: "feel", label: "How did this exercise feel?", kind: "select", value: "ok", options: [{ value: "ok", label: "Just right" }, { value: "easy", label: "Too easy" }, { value: "hard", label: "Too hard" }] }] : []
     ]
   });
   blocks.push({
@@ -2037,12 +2177,24 @@ function completeBlocks(state, a, today) {
     ]
   });
   const items = [
+    ...f.sideQuest ? [{ title: `Side quest complete: ${f.sideQuest}`, badge: `+${XP.sideQuest} XP`, tone: "ok" }] : [],
     ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: "new", tone: "ok" })),
     ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: "build the base, then climb again", tone: "warn" })),
     ...f.logged.map((l) => ({ title: exercise(l.exercise).name, subtitle: l.sets.join(" \xB7 ") })),
     ...f.skipped.map((n) => ({ title: `${n} \u2014 skipped`, tone: "muted" }))
   ];
   if (items.length) blocks.push({ type: "list", items });
+  for (const i of state.injuries) {
+    const where = `${i.side === "both" ? "" : `${i.side} `}${i.area.replace("_", " ")}`;
+    blocks.push({
+      type: "form",
+      title: `How does your ${where} feel now?`,
+      tool: "plugin_fitness_pain",
+      button: "Update",
+      args: { area: i.area, side: i.side },
+      fields: [{ name: "pain", label: "Pain (0 = gone)", kind: "slider", min: 0, max: 10, value: i.pain, unit: "/10", hint: `It was ${i.pain}/10. At 2 or less the full exercises come back.` }]
+    });
+  }
   const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
   blocks.push({ type: "text", text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? "Recovery"}.` });
   return blocks;
@@ -2157,6 +2309,25 @@ function historyBlocks(state, today) {
   });
   if (volume.some((v) => v > 0)) {
     blocks.push({ type: "chart", kind: "bar", title: "Reps per week", labels: weeks.map((w) => w.slice(5)), series: [{ name: "Reps", values: volume }] });
+  }
+  const pains = (state.painLog ?? []).slice(-120);
+  if (pains.length >= 2) {
+    const dates = [...new Set(pains.map((p) => p.date))].sort().slice(-60);
+    const keys = [...new Set(pains.map((p) => `${p.side === "both" ? "" : `${p.side} `}${p.area.replace("_", " ")}`))].slice(0, 4);
+    blocks.push({
+      type: "chart",
+      kind: "line",
+      title: "Pain",
+      unit: "/10",
+      labels: dates.map((d) => d.slice(5)),
+      series: keys.map((k) => ({
+        name: k,
+        values: dates.map((d) => {
+          const e = pains.filter((p) => p.date === d && `${p.side === "both" ? "" : `${p.side} `}${p.area.replace("_", " ")}` === k).at(-1);
+          return e ? e.pain : null;
+        })
+      }))
+    });
   }
   const body = state.body.filter((b) => b.weightKg !== void 0).slice(-60);
   if (body.length >= 2) {
@@ -2492,6 +2663,7 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
         exercises: q.main.map(describeItem),
         skipped: q.skipped,
         gate_tests: q.gateTests,
+        side_quest: q.sideQuestName ? { name: q.sideQuestName, exercises: q.sideQuest.map(describeItem), reward_xp: 20 } : null,
         how_to_do_it: "Guided: plugin_fitness_start, then plugin_fitness_set after every set (the page shows each step with its animation). " + (q.type === "gate" ? "Or log all trial results at once with plugin_fitness_gate." : "Or log whole exercises with plugin_fitness_log and finish with plugin_fitness_complete."),
         in_progress: describeSession(s, date),
         page: PAGE_URL
@@ -2508,6 +2680,8 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
       running: true,
       quest: a.type,
       session: a.session ?? null,
+      light_day: a.light ?? null,
+      side_quest: a.sideQuest ?? null,
       step: a.cursor + 1,
       of: a.steps.length,
       current: {
@@ -2530,22 +2704,51 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
   };
   registry.registerTool({
     name: "plugin_fitness_start",
-    description: "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets. Report each set with plugin_fitness_set. The dashboard page shows the same steps with animations.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    handler: () => mutate((s, date) => {
-      startSession(s, date, clock.now());
-      return describeSession(s, date);
-    })
+    description: "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets, then the rehab side quest if something hurts. Ask first how they slept and how sore they are: poor sleep or heavy soreness makes it a light day. Report each set with plugin_fitness_set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sleep: { type: "string", enum: ["good", "ok", "poor"] },
+        soreness: { type: "string", enum: ["none", "some", "heavy"] }
+      },
+      additionalProperties: false
+    },
+    handler: (args) => {
+      const pick2 = (v, allowed, name) => {
+        if (v === void 0 || v === null || v === "") return void 0;
+        if (!allowed.includes(v)) throw new Error(`${name} must be one of: ${allowed.join(", ")}`);
+        return v;
+      };
+      const readiness = {};
+      const sleep = pick2(args.sleep, ["good", "ok", "poor"], "sleep");
+      if (sleep) readiness.sleep = sleep;
+      const soreness = pick2(args.soreness, ["none", "some", "heavy"], "soreness");
+      if (soreness) readiness.soreness = soreness;
+      return mutate((s, date) => {
+        startSession(s, date, clock.now(), readiness);
+        return describeSession(s, date);
+      });
+    }
   });
   registry.registerTool({
     name: "plugin_fitness_set",
     description: "Report the set just done in the running quest: reps, or seconds for holds (for a Gate trial: the all-out result). Moves to the rest, the next set or the next exercise; after the last step the quest is logged and completed.",
-    inputSchema: { type: "object", properties: { value: { type: "number", description: "Reps done or seconds held" } }, required: ["value"], additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        value: { type: "number", description: "Reps done or seconds held" },
+        feel: { type: "string", enum: ["easy", "ok", "hard"], description: "How the exercise felt (ask on its last set): easy raises the next target faster, hard keeps it." }
+      },
+      required: ["value"],
+      additionalProperties: false
+    },
     handler: (args) => {
       const value = optNum(args.value, "value", 0, 900);
       if (value === void 0) throw new Error("value is required (reps or seconds)");
+      const feel = args.feel === void 0 || args.feel === "" ? void 0 : String(args.feel);
+      if (feel !== void 0 && feel !== "easy" && feel !== "ok" && feel !== "hard") throw new Error("feel must be 'easy', 'ok' or 'hard'");
       return mutate((s, date) => {
-        recordSet(s, date, clock.now(), value);
+        recordSet(s, date, clock.now(), value, feel);
         return describeSession(s, date);
       });
     }

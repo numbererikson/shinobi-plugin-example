@@ -65,12 +65,26 @@ export interface Injury {
   note?: string;
 }
 
+export type Feel = 'easy' | 'ok' | 'hard';
+
 export interface ExerciseLog {
   date: string;
   exercise: string;
   /** Reps (or seconds for holds) per set. */
   sets: number[];
+  /** How the exercise felt; steers the next target. */
+  feel?: Feel;
 }
+
+export interface PainEntry {
+  date: string;
+  area: Area;
+  side: Side;
+  pain: number;
+}
+
+export type Sleep = 'good' | 'ok' | 'poor';
+export type Soreness = 'none' | 'some' | 'heavy';
 
 export type QuestType = 'training' | 'recovery' | 'gate';
 
@@ -144,9 +158,11 @@ export interface HunterState {
   notified: { quest?: string; warning?: string };
   /** The guided quest in progress (or just finished) today. */
   active?: ActiveSession;
+  /** Every pain report, for the pain chart. */
+  painLog?: PainEntry[];
 }
 
-export type StepKind = 'warmup' | 'work' | 'trial' | 'recovery';
+export type StepKind = 'warmup' | 'work' | 'trial' | 'recovery' | 'rehab';
 
 export interface SessionStep {
   kind: StepKind;
@@ -162,6 +178,8 @@ export interface SessionStep {
   /** Rest after each set of this step, seconds. */
   restSec: number;
   note?: string;
+  /** How it felt (asked on the last set of a work step). */
+  feel?: Feel;
 }
 
 export interface SessionSummary {
@@ -176,6 +194,8 @@ export interface SessionSummary {
   recalibrated: string[];
   logged: { exercise: string; sets: number[] }[];
   skipped: string[];
+  /** The rehab side quest was done. */
+  sideQuest?: string;
 }
 
 export interface ActiveSession {
@@ -190,6 +210,10 @@ export interface ActiveSession {
   /** Seconds of the current rest (for the progress bar). */
   restSec?: number;
   startedAt: string;
+  /** Readiness made this a light day (one set fewer, bottom of the range): the reason. */
+  light?: string;
+  /** Name of today's rehab side quest, when it is part of the session. */
+  sideQuest?: string;
   finished?: SessionSummary;
 }
 

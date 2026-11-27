@@ -574,6 +574,51 @@ export const EXERCISES: Exercise[] = [
     },
   },
 
+  // ---------- shoulder care (rehab side quest) ----------
+  {
+    id: 'side_lying_external_rotation',
+    name: 'Side-Lying External Rotation',
+    kind: 'reps',
+    sets: 1,
+    min: 12,
+    max: 15,
+    perSide: true,
+    restSec: 0,
+    equipment: 'none',
+    stress: { shoulder: 1 },
+    cues: ['Lie on your side, top elbow bent 90° and tucked against your ribs (a rolled towel under it helps).', 'Keep the elbow glued to your side and rotate the forearm up towards the ceiling.', 'Lower slowly. Small, smooth and completely pain-free.'],
+    mistake: 'Letting the elbow lift off the body — then the shoulder does the wrong job.',
+    figure: {
+      props: [floor],
+      keys: [
+        { pose: { torso: -90, neck: -96, armN: [94, 66], armF: [-96, -96], legN: [82, 100], legF: [84, 102], anchor: { joint: 'hip', at: at(118, GROUND - 12) } }, hold: 0.3 },
+        { pose: { torso: -90, neck: -96, armN: [94, 172], armF: [-96, -96], legN: [82, 100], legF: [84, 102], anchor: { joint: 'hip', at: at(118, GROUND - 12) } }, hold: 0.6 },
+      ],
+      move: 1.4,
+    },
+  },
+  {
+    id: 'scapular_pushup',
+    name: 'Scapular Push-up',
+    kind: 'reps',
+    sets: 1,
+    min: 10,
+    max: 15,
+    restSec: 0,
+    equipment: 'none',
+    stress: { shoulder: 1, wrist: 1 },
+    cues: ['Top of a push-up (or on your knees), arms locked straight.', 'Let the chest sink a little so the shoulder blades come together.', 'Push the floor away so they spread apart — arms never bend.'],
+    mistake: 'Bending the elbows; the whole movement is in the shoulder blades.',
+    figure: {
+      props: [floor, { kind: 'arrow', from: at(128, 128), to: at(128, 110) }],
+      keys: [
+        { pose: plank(111, at(30, FOOT_Y - 8), at(148, FLOOR_HAND)), hold: 0.4 },
+        { pose: plank(114, at(30, FOOT_Y - 8), at(148, FLOOR_HAND)), hold: 0.6 },
+      ],
+      move: 1,
+    },
+  },
+
   // ---------- dip ----------
   {
     id: 'support_hold',
@@ -931,3 +976,25 @@ export const TRACKED_LADDERS = ['pull', 'dip', 'push', 'legs', 'hinge', 'core', 
 export const WARMUP_A = ['cat_cow', 'wall_slide'];
 export const WARMUP_B = ['deep_squat_hold', 'hip_flexor_stretch'];
 export const RECOVERY = ['cat_cow', 'wall_slide', 'deep_squat_hold', 'hip_flexor_stretch', 'forward_fold', 'dead_hang'];
+
+/**
+ * Gentle care for a hurting area: a daily side quest while the status effect
+ * lasts. Only exercises that load that area lightly (stress ≤ 1); they stay
+ * allowed up to pain 6/10, inside the pain-free range.
+ */
+export const REHAB: Partial<Record<Area, string[]>> = {
+  shoulder: ['wall_slide', 'prone_y_raise', 'side_lying_external_rotation', 'scapular_pushup'],
+  lower_back: ['cat_cow', 'dead_bug', 'glute_bridge'],
+  hip: ['glute_bridge', 'cat_cow', 'hip_flexor_stretch'],
+  knee: ['glute_bridge', 'dead_bug'],
+};
+export const REHAB_MAX_PAIN = 6;
+export const REHAB_NAME: Record<Area, string> = {
+  shoulder: 'Repair the shoulder',
+  elbow: 'Repair the elbow',
+  wrist: 'Repair the wrist',
+  lower_back: 'Repair the lower back',
+  hip: 'Repair the hip',
+  knee: 'Repair the knee',
+  ankle: 'Repair the ankle',
+};

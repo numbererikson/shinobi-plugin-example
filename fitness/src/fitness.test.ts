@@ -95,23 +95,30 @@ describe('figures', () => {
 // ---- rules -------------------------------------------------------------------
 
 describe('new hunter', () => {
-  it('places ladders from the baseline and opens the Awakening Gate on the first training day', () => {
+  it('places estimates one step below what they suggest; the Gate places what was really done', () => {
     const s = newHunter(profile(), MONDAY, { pushups: 15, squats: 25, pullups: 6 });
-    expect(LADDERS.push.levels[s.levels.push]).toBe('pushup');
-    expect(LADDERS.legs.levels[s.levels.legs]).toBe('split_squat');
-    expect(LADDERS.pull.levels[s.levels.pull]).toBe('pullup');
+    expect(LADDERS.push.levels[s.levels.push]).toBe('incline_pushup');
+    expect(LADDERS.legs.levels[s.levels.legs]).toBe('squat');
+    expect(LADDERS.pull.levels[s.levels.pull]).toBe('negative_pullup');
     expect(s.rank).toBe('E');
     expect(questFor(s, MONDAY).type).toBe('gate');
     expect(questFor(s, addDays(MONDAY, 1)).type).toBe('recovery');
+    clearGate(s, MONDAY, { pushups: 15, pullups: 6 });
+    expect(LADDERS.push.levels[s.levels.push]).toBe('pushup');
+    expect(LADDERS.pull.levels[s.levels.pull]).toBe('pullup');
   });
 });
 
+/** A hunter placed as if tested: pull-up, push-up, split squat. */
+const tested = (p: Profile = profile()) => {
+  const s = newHunter(p, MONDAY);
+  s.levels = { ...s.levels, pull: 3, push: 2, legs: 2 };
+  s.nextGate = addDays(MONDAY, 42);
+  return s;
+};
+
 describe('quests and injuries', () => {
-  const afterGate = (p: Profile = profile()) => {
-    const s = newHunter(p, MONDAY, { pushups: 15, squats: 25, pullups: 6 });
-    s.nextGate = addDays(MONDAY, 42);
-    return s;
-  };
+  const afterGate = tested;
 
   it('alternates A and B sessions on training days', () => {
     const s = afterGate();
@@ -164,8 +171,7 @@ describe('quests and injuries', () => {
 
 describe('progression', () => {
   it('prescribes one more rep than last time, unlocks after two top sessions, recalibrates after two weak ones', () => {
-    const s = newHunter(profile(), MONDAY, { pushups: 10 });
-    s.nextGate = addDays(MONDAY, 42);
+    const s = tested();
     expect(questFor(s, MONDAY).main.find((m) => m.exercise === 'pushup')!.target).toEqual([8, 8, 8]);
     logSets(s, MONDAY, 'pushup', [10, 9, 8]);
     expect(questFor(s, addDays(MONDAY, 2)).main.length).toBeGreaterThan(0);
@@ -182,7 +188,7 @@ describe('progression', () => {
   });
 
   it('logging a substitute does not move the ladder', () => {
-    const s = newHunter(profile(), MONDAY, { pushups: 10 });
+    const s = tested();
     logSets(s, MONDAY, 'wall_pushup', [20, 20, 20]);
     logSets(s, MONDAY, 'wall_pushup', [20, 20, 20]);
     expect(LADDERS.push.levels[s.levels.push]).toBe('pushup');
@@ -356,7 +362,7 @@ describe('guided quest', () => {
     host.call('plugin_fitness_skip', { what: 'exercise' }); // split squat
     const done = host.call('plugin_fitness_end');
     expect(done.finished).toMatchObject({ outcome: 'complete', xp: 100, logged: [{ exercise: 'prone_y_raise', sets: [10, 9, 8] }] });
-    expect(done.finished.skipped).toEqual(['Push-up', 'Split Squat', 'Dead Bug']);
+    expect(done.finished.skipped).toEqual(['Push-up', 'Bodyweight Squat', 'Dead Bug']);
 
     const complete = render(host);
     expect(complete.blocks[0]).toMatchObject({ type: 'heading', text: 'Quest complete' });
@@ -391,10 +397,75 @@ describe('guided quest', () => {
   });
 });
 
+describe('rehab side quest and pain check', () => {
+  it('adds gentle shoulder care while it hurts 1-6/10, never twice the same exercise, nothing above 6', () => {
+    const s = tested();
+    expect(questFor(s, MONDAY).sideQuest).toEqual([]);
+    reportPain(s, MONDAY, 'shoulder', 'right', 4);
+    const q = questFor(s, MONDAY);
+    expect(q.sideQuestName).toBe('Repair the shoulder');
+    // Wall slide is already the warm-up and prone Y raise stands in for pull-ups today.
+    expect(q.sideQuest.map((x) => x.exercise)).toEqual(['side_lying_external_rotation', 'scapular_pushup']);
+    reportPain(s, MONDAY, 'shoulder', 'right', 7);
+    expect(questFor(s, MONDAY).sideQuest).toEqual([]);
+    expect(s.painLog!.map((p) => p.pain)).toEqual([7]);
+    reportPain(s, addDays(MONDAY, 1), 'shoulder', 'right', 3);
+    expect(s.painLog!.map((p) => [p.date, p.pain])).toEqual([[MONDAY, 7], [addDays(MONDAY, 1), 3]]);
+    const chart = renderPage(s, addDays(MONDAY, 1), new Date(), 'UTC').blocks.find((b) => b.type === 'chart' && b.title === 'Pain');
+    expect(chart).toMatchObject({ series: [{ name: 'right shoulder', values: [7, 3] }] });
+  });
+
+  it('runs the side quest at the end of the guided quest for +20 XP and asks about the pain', () => {
+    const clock = clockAt('2026-12-01T09:31:00Z'); // Tuesday: recovery
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, pains: [{ area: 'shoulder', side: 'right', pain: 4 }] });
+    const started = host.call('plugin_fitness_start');
+    expect(started.side_quest).toBe('Repair the shoulder');
+    let r = started;
+    while (r.running) r = host.call('plugin_fitness_set', { value: 10 });
+    expect(r.finished).toMatchObject({ outcome: 'complete', sideQuest: 'Repair the shoulder', xp: 30 + 20 });
+    const blocks = (host.pages[0]!.render() as { blocks: { type: string; title?: string; tool?: string; args?: Record<string, unknown> }[] }).blocks;
+    const check = blocks.find((b) => b.type === 'form' && b.tool === 'plugin_fitness_pain');
+    expect(check).toMatchObject({ title: 'How does your right shoulder feel now?', args: { area: 'shoulder', side: 'right' } });
+  });
+});
+
+describe('dosing', () => {
+  it('too easy raises the next target by two steps, too hard keeps it', () => {
+    const s = tested();
+    logSets(s, MONDAY, 'pushup', [10, 10, 10], 'easy');
+    expect(questFor(s, addDays(MONDAY, 2)).main.find((m) => m.exercise === 'pushup')!.target).toEqual([12, 12, 12]);
+    logSets(s, addDays(MONDAY, 2), 'pushup', [12, 11, 10], 'hard');
+    expect(questFor(s, addDays(MONDAY, 4)).main.find((m) => m.exercise === 'pushup')!.target).toEqual([12, 11, 10]);
+  });
+
+  it('poor sleep or heavy soreness makes a light day; the feel on the last set is saved', () => {
+    const clock = clockAt('2026-11-30T09:31:00Z');
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75 });
+    host.call('plugin_fitness_gate', { pushups: 12, hollow_hold: 10 });
+    clock.set('2026-12-02T09:31:00Z');
+    const start = host.call('plugin_fitness_start', { sleep: 'poor', soreness: 'none' });
+    expect(start.light_day).toBe('poor sleep');
+    const a = host.hunter().active!;
+    const push = a.steps.find((x) => x.exercise === 'pushup')!;
+    expect(push).toMatchObject({ sets: 2, target: [8, 8] });
+    expect((host.pages[0]!.render() as { blocks: { type: string; text?: string }[] }).blocks.some((b) => /Light day \(poor sleep\)/.test(b.text ?? ''))).toBe(true);
+    // Walk to the push-ups and log them with a feel.
+    let r = start;
+    while (r.current.exercise !== 'pushup') r = host.call('plugin_fitness_skip', { what: 'exercise' });
+    host.call('plugin_fitness_set', { value: 9 });
+    host.call('plugin_fitness_skip', { what: 'rest' });
+    host.call('plugin_fitness_set', { value: 9, feel: 'easy' });
+    host.call('plugin_fitness_end');
+    expect(host.hunter().logs.at(-1)).toMatchObject({ exercise: 'pushup', sets: [9, 9], feel: 'easy' });
+    expect(() => host.call('plugin_fitness_set', { value: 1, feel: 'meh' })).toThrow(/feel must be/);
+  });
+});
+
 describe('your path', () => {
   it('plans the week and explains every ladder', () => {
-    const s = newHunter(profile(), MONDAY, { pushups: 10 });
-    s.nextGate = addDays(MONDAY, 42);
+    const s = tested();
     const week = weekPlan(s, addDays(MONDAY, 2));
     expect(week.map((d) => d.label)).toEqual(['Training', 'Recovery', 'Training A', 'Recovery', 'Training B', 'Recovery', 'Recovery']);
     expect(week.map((d) => d.status)).toEqual(['missed', 'missed', 'today', 'planned', 'planned', 'planned', 'planned']);

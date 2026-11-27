@@ -8,7 +8,7 @@
 
 import { AREAS, BY_ID, EXERCISES, LADDERS, TRACKED_LADDERS, type Area } from './exercises.js';
 import { renderPage } from './page.js';
-import { activeToday, endSession, recordSet, restLeft, skipRest, skipStep, startSession } from './session.js';
+import { activeToday, endSession, recordSet, restLeft, skipRest, skipStep, startSession, type Readiness } from './session.js';
 import {
   clearGate,
   completeQuest,
@@ -30,7 +30,7 @@ import {
   type QuestItem,
 } from './rules.js';
 import { T } from './text.js';
-import { GATE_TESTS, STATE_KEY, type GateTest, type HunterState, type PluginRegistry, type Side } from './types.js';
+import { GATE_TESTS, STATE_KEY, type Feel, type GateTest, type HunterState, type PluginRegistry, type Side } from './types.js';
 
 export interface Clock {
   now(): Date;
@@ -300,6 +300,7 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
         exercises: q.main.map(describeItem),
         skipped: q.skipped,
         gate_tests: q.gateTests,
+        side_quest: q.sideQuestName ? { name: q.sideQuestName, exercises: q.sideQuest.map(describeItem), reward_xp: 20 } : null,
         how_to_do_it:
           'Guided: plugin_fitness_start, then plugin_fitness_set after every set (the page shows each step with its animation). ' +
           (q.type === 'gate' ? 'Or log all trial results at once with plugin_fitness_gate.' : 'Or log whole exercises with plugin_fitness_log and finish with plugin_fitness_complete.'),
@@ -321,6 +322,8 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
       running: true,
       quest: a.type,
       session: a.session ?? null,
+      light_day: a.light ?? null,
+      side_quest: a.sideQuest ?? null,
       step: a.cursor + 1,
       of: a.steps.length,
       current: {
@@ -344,24 +347,53 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
 
   registry.registerTool({
     name: 'plugin_fitness_start',
-    description: "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets. Report each set with plugin_fitness_set. The dashboard page shows the same steps with animations.",
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    handler: () =>
-      mutate((s, date) => {
-        startSession(s, date, clock.now());
+    description:
+      "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets, then the rehab side quest if something hurts. Ask first how they slept and how sore they are: poor sleep or heavy soreness makes it a light day. Report each set with plugin_fitness_set.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sleep: { type: 'string', enum: ['good', 'ok', 'poor'] },
+        soreness: { type: 'string', enum: ['none', 'some', 'heavy'] },
+      },
+      additionalProperties: false,
+    },
+    handler: (args) => {
+      const pick = <T extends string>(v: unknown, allowed: readonly T[], name: string): T | undefined => {
+        if (v === undefined || v === null || v === '') return undefined;
+        if (!allowed.includes(v as T)) throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
+        return v as T;
+      };
+      const readiness: Readiness = {};
+      const sleep = pick(args.sleep, ['good', 'ok', 'poor'] as const, 'sleep');
+      if (sleep) readiness.sleep = sleep;
+      const soreness = pick(args.soreness, ['none', 'some', 'heavy'] as const, 'soreness');
+      if (soreness) readiness.soreness = soreness;
+      return mutate((s, date) => {
+        startSession(s, date, clock.now(), readiness);
         return describeSession(s, date);
-      }),
+      });
+    },
   });
 
   registry.registerTool({
     name: 'plugin_fitness_set',
     description: 'Report the set just done in the running quest: reps, or seconds for holds (for a Gate trial: the all-out result). Moves to the rest, the next set or the next exercise; after the last step the quest is logged and completed.',
-    inputSchema: { type: 'object', properties: { value: { type: 'number', description: 'Reps done or seconds held' } }, required: ['value'], additionalProperties: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        value: { type: 'number', description: 'Reps done or seconds held' },
+        feel: { type: 'string', enum: ['easy', 'ok', 'hard'], description: 'How the exercise felt (ask on its last set): easy raises the next target faster, hard keeps it.' },
+      },
+      required: ['value'],
+      additionalProperties: false,
+    },
     handler: (args) => {
       const value = optNum(args.value, 'value', 0, 900);
       if (value === undefined) throw new Error('value is required (reps or seconds)');
+      const feel = args.feel === undefined || args.feel === '' ? undefined : String(args.feel);
+      if (feel !== undefined && feel !== 'easy' && feel !== 'ok' && feel !== 'hard') throw new Error("feel must be 'easy', 'ok' or 'hard'");
       return mutate((s, date) => {
-        recordSet(s, date, clock.now(), value);
+        recordSet(s, date, clock.now(), value, feel as Feel | undefined);
         return describeSession(s, date);
       });
     },
