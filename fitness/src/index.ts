@@ -8,6 +8,7 @@
 
 import { AREAS, BY_ID, EXERCISES, LADDERS, TRACKED_LADDERS, type Area } from './exercises.js';
 import { renderPage } from './page.js';
+import { activeToday, endSession, recordSet, restLeft, skipRest, skipStep, startSession } from './session.js';
 import {
   clearGate,
   completeQuest,
@@ -299,10 +300,95 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
         exercises: q.main.map(describeItem),
         skipped: q.skipped,
         gate_tests: q.gateTests,
-        how_to_finish: q.type === 'gate' ? 'Log the trials with plugin_fitness_gate.' : 'Log each exercise with plugin_fitness_log, then plugin_fitness_complete.',
+        how_to_do_it:
+          'Guided: plugin_fitness_start, then plugin_fitness_set after every set (the page shows each step with its animation). ' +
+          (q.type === 'gate' ? 'Or log all trial results at once with plugin_fitness_gate.' : 'Or log whole exercises with plugin_fitness_log and finish with plugin_fitness_complete.'),
+        in_progress: describeSession(s, date),
         page: PAGE_URL,
       };
     },
+  });
+
+  // ---- guided quest: start → set → (rest) → … → summary ----
+
+  const describeSession = (s: HunterState, date: string): Record<string, unknown> => {
+    const a = activeToday(s, date);
+    if (!a) return { running: false };
+    if (a.finished) return { running: false, finished: a.finished, page: PAGE_URL };
+    const step = a.steps[a.cursor]!;
+    const ex = BY_ID.get(step.exercise)!;
+    return {
+      running: true,
+      quest: a.type,
+      session: a.session ?? null,
+      step: a.cursor + 1,
+      of: a.steps.length,
+      current: {
+        kind: step.kind,
+        exercise: ex.id,
+        name: ex.name,
+        set: step.done.length + 1,
+        sets: step.sets,
+        target: step.target[step.done.length] ?? null,
+        unit: ex.kind === 'hold' ? 'seconds' : 'reps',
+        per_side: ex.perSide === true,
+        cues: ex.cues,
+        avoid: ex.mistake,
+        ...(step.note ? { note: step.note } : {}),
+      },
+      rest_seconds_left: restLeft(a, clock.now()),
+      next: a.steps.slice(a.cursor + 1).map((x) => BY_ID.get(x.exercise)!.name),
+      page: PAGE_URL,
+    };
+  };
+
+  registry.registerTool({
+    name: 'plugin_fitness_start',
+    description: "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets. Report each set with plugin_fitness_set. The dashboard page shows the same steps with animations.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: () =>
+      mutate((s, date) => {
+        startSession(s, date, clock.now());
+        return describeSession(s, date);
+      }),
+  });
+
+  registry.registerTool({
+    name: 'plugin_fitness_set',
+    description: 'Report the set just done in the running quest: reps, or seconds for holds (for a Gate trial: the all-out result). Moves to the rest, the next set or the next exercise; after the last step the quest is logged and completed.',
+    inputSchema: { type: 'object', properties: { value: { type: 'number', description: 'Reps done or seconds held' } }, required: ['value'], additionalProperties: false },
+    handler: (args) => {
+      const value = optNum(args.value, 'value', 0, 900);
+      if (value === undefined) throw new Error('value is required (reps or seconds)');
+      return mutate((s, date) => {
+        recordSet(s, date, clock.now(), value);
+        return describeSession(s, date);
+      });
+    },
+  });
+
+  registry.registerTool({
+    name: 'plugin_fitness_skip',
+    description: "In the running quest: skip the current rest (what: 'rest') or the current exercise (what: 'exercise').",
+    inputSchema: { type: 'object', properties: { what: { type: 'string', enum: ['rest', 'exercise'] } }, required: ['what'], additionalProperties: false },
+    handler: (args) =>
+      mutate((s, date) => {
+        if (args.what === 'rest') skipRest(s, date);
+        else if (args.what === 'exercise') skipStep(s, date, clock.now());
+        else throw new Error("what must be 'rest' or 'exercise'");
+        return describeSession(s, date);
+      }),
+  });
+
+  registry.registerTool({
+    name: 'plugin_fitness_end',
+    description: 'End the running quest now. Sets done so far are logged; the quest counts as complete if any real work was done.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    handler: () =>
+      mutate((s, date) => {
+        endSession(s, date, clock.now());
+        return describeSession(s, date);
+      }),
   });
 
   registry.registerTool({
@@ -544,7 +630,7 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
         ...n,
         url: PAGE_URL,
         tag: `fitness-${date}`,
-        ...(q.type === 'recovery' ? { actions: [{ label: 'Done', tool: 'plugin_fitness_complete', args: { date } }] } : {}),
+        ...(q.type === 'recovery' && kind === 'quest' ? { actions: [{ label: 'Done', tool: 'plugin_fitness_complete', args: { date } }] } : {}),
       });
     } catch (err) {
       console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -583,7 +669,7 @@ export function registerFitness(registry: PluginRegistry, clock: Clock = { now: 
       theme: 'hologram',
       render: () => {
         const s = read();
-        return renderPage(s, today(s).date, defaultTz);
+        return renderPage(s, today(s).date, clock.now(), defaultTz);
       },
     });
   }

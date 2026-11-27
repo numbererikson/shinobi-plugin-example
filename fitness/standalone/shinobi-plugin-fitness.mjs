@@ -135,63 +135,167 @@ function frames(spec) {
 var fmt = (n) => (Math.round(n * 10) / 10).toString();
 var pt = (v) => `${fmt(v[0])},${fmt(v[1])}`;
 var pts = (vs) => vs.map(pt).join(" ");
+var INK = "#020814";
+var WIDTH = { near: 8, far: 7, torso: 13, neck: 6, outline: 4 };
 function propSvg(p) {
+  const metal = `stroke="url(#metal)" stroke-linecap="round"`;
   switch (p.kind) {
     case "floor":
-      return `<line x1="4" y1="${GROUND + 3}" x2="${SIZE - 4}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="3"/>`;
-    case "bar":
-      return `<line x1="${p.x1 ?? 30}" y1="${p.y}" x2="${p.x2 ?? 170}" y2="${p.y}" stroke="${COLOR.prop}" stroke-width="5" stroke-linecap="round"/>`;
-    case "dipBars":
-      return `<line x1="${p.x1}" y1="${p.y}" x2="${p.x2}" y2="${p.y}" stroke="${COLOR.prop}" stroke-width="6" stroke-linecap="round"/><line x1="${(p.x1 + p.x2) / 2}" y1="${p.y}" x2="${(p.x1 + p.x2) / 2}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="3" opacity="0.6"/>`;
-    case "box":
-      return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="3" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="3"/>`;
-    case "wall":
-      return `<line x1="${p.x}" y1="8" x2="${p.x}" y2="${GROUND + 3}" stroke="${COLOR.prop}" stroke-width="4"/>`;
-    case "pad":
-      return `<line x1="${p.x}" y1="${p.y1}" x2="${p.x}" y2="${p.y2}" stroke="${COLOR.prop}" stroke-width="7" stroke-linecap="round"/>`;
-    case "arrow": {
-      const [x1, y1] = p.from;
-      const [x2, y2] = p.to;
-      const a = Math.atan2(y2 - y1, x2 - x1);
-      const h1 = [x2 - 6 * Math.cos(a - 0.5), y2 - 6 * Math.sin(a - 0.5)];
-      const h2 = [x2 - 6 * Math.cos(a + 0.5), y2 - 6 * Math.sin(a + 0.5)];
-      return `<polyline points="${pts([p.from, p.to])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2" stroke-dasharray="3 3"/><polyline points="${pts([h1, p.to, h2])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2"/>`;
+      return `<line x1="6" y1="${GROUND + 4}" x2="${SIZE - 6}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="3" stroke-linecap="round"/><line x1="6" y1="${GROUND + 4}" x2="${SIZE - 6}" y2="${GROUND + 4}" stroke="${COLOR.body}" stroke-width="1" opacity="0.5"/>`;
+    case "bar": {
+      const x1 = p.x1 ?? 30;
+      const x2 = p.x2 ?? 170;
+      return `<line x1="${x1}" y1="${p.y}" x2="${x1}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="4" opacity="0.55"/><line x1="${x2}" y1="${p.y}" x2="${x2}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="4" opacity="0.55"/><line x1="${x1 - 4}" y1="${p.y}" x2="${x2 + 4}" y2="${p.y}" ${metal} stroke-width="6"/>`;
     }
+    case "dipBars": {
+      const mid = (p.x1 + p.x2) / 2;
+      return `<line x1="${mid}" y1="${p.y}" x2="${mid}" y2="${GROUND + 4}" stroke="${COLOR.prop}" stroke-width="5" opacity="0.55"/><line x1="${p.x1}" y1="${p.y}" x2="${p.x2}" y2="${p.y}" ${metal} stroke-width="7"/>`;
+    }
+    case "box":
+      return `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="4" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="3"/><line x1="${p.x + 4}" y1="${p.y + 2}" x2="${p.x + p.w - 4}" y2="${p.y + 2}" stroke="${COLOR.body}" stroke-width="1.5" opacity="0.5"/>`;
+    case "wall":
+      return `<rect x="${p.x - 3}" y="6" width="6" height="${GROUND - 2}" fill="${COLOR.propFill}" stroke="${COLOR.prop}" stroke-width="2"/>`;
+    case "pad":
+      return `<line x1="${p.x}" y1="${p.y1}" x2="${p.x}" y2="${p.y2}" stroke="${COLOR.prop}" stroke-width="9" stroke-linecap="round"/>`;
+    case "arrow":
+      return arrow(p.from, p.to, 0);
   }
 }
-function animatedLine(list, dur, pick2, attrs) {
-  const values = list.map((f) => pts(pick2(f.joints)));
-  const first = values[0];
-  if (list.length < 2) return `<polyline points="${first}" ${attrs}/>`;
-  const keyTimes = list.map((f) => Math.min(f.at / dur, 1).toFixed(4)).join(";");
-  return `<polyline points="${first}" ${attrs}><animate attributeName="points" dur="${fmt(dur)}s" repeatCount="indefinite" values="${values.join(";")}" keyTimes="${keyTimes}"/></polyline>`;
+function arrow(a, b, bow) {
+  const d = sub(b, a);
+  const l = len(d) || 1;
+  const n = [-d[1] / l, d[0] / l];
+  const c = add(scale(add(a, b), 0.5), scale(n, bow));
+  const t = sub(b, c);
+  const tl = len(t) || 1;
+  const u = [t[0] / tl, t[1] / tl];
+  const side = [-u[1], u[0]];
+  const h1 = add(sub(b, scale(u, 7)), scale(side, 4));
+  const h2 = add(sub(b, scale(u, 7)), scale(side, -4));
+  return `<path d="M${pt(a)} Q${pt(c)} ${pt(b)}" fill="none" stroke="${COLOR.arrow}" stroke-width="2.5" stroke-dasharray="4 3" stroke-linecap="round" opacity="0.9"/><polyline points="${pts([h1, b, h2])}" fill="none" stroke="${COLOR.arrow}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
-function animatedHead(list, dur) {
-  const head = list[0].joints.head;
-  const base = `cx="${fmt(head[0])}" cy="${fmt(head[1])}" r="${SEG.head}" fill="${COLOR.head}" stroke="${COLOR.body}" stroke-width="4"`;
-  if (list.length < 2) return `<circle ${base}/>`;
-  const keyTimes = list.map((f) => Math.min(f.at / dur, 1).toFixed(4)).join(";");
-  const cx = list.map((f) => fmt(f.joints.head[0])).join(";");
-  const cy = list.map((f) => fmt(f.joints.head[1])).join(";");
-  return `<circle ${base}><animate attributeName="cx" dur="${fmt(dur)}s" repeatCount="indefinite" values="${cx}" keyTimes="${keyTimes}"/><animate attributeName="cy" dur="${fmt(dur)}s" repeatCount="indefinite" values="${cy}" keyTimes="${keyTimes}"/></circle>`;
+var keyTimesOf = (list, dur) => list.map((f) => Math.min(f.at / dur, 1).toFixed(4)).join(";");
+function limbDef(id, list, dur, pick2) {
+  const values = list.map((f) => pts(pick2(f.joints)));
+  if (list.length < 2) return `<polyline id="${id}" points="${values[0]}"/>`;
+  return `<polyline id="${id}" points="${values[0]}"><animate attributeName="points" dur="${fmt(dur)}s" repeatCount="indefinite" values="${values.join(";")}" keyTimes="${keyTimesOf(list, dur)}"/></polyline>`;
+}
+function limbUse(id, width, paint, opacity = 1) {
+  const common = `fill="none" stroke-linecap="round" stroke-linejoin="round"`;
+  return `<g opacity="${opacity}"><use href="#${id}" ${common} stroke="${INK}" stroke-width="${width + WIDTH.outline}"/><use href="#${id}" ${common} stroke="${paint}" stroke-width="${width}"/></g>`;
+}
+function animatedAttr(list, dur, attr, value) {
+  if (list.length < 2) return "";
+  return `<animate attributeName="${attr}" dur="${fmt(dur)}s" repeatCount="indefinite" values="${list.map((f) => fmt(value(f.joints))).join(";")}" keyTimes="${keyTimesOf(list, dur)}"/>`;
+}
+var MOVING = ["hip", "shoulder", "head", "handN", "ankleN", "kneeN", "elbowN"];
+function endPose(spec) {
+  if (spec.keys.length < 2) return null;
+  const view = spec.view ?? "side";
+  const start = solve(spec.keys[0].pose, view);
+  let best = null;
+  let bestD = 0;
+  for (const k of spec.keys.slice(1)) {
+    const j = solve(k.pose, view);
+    const d = MOVING.reduce((s, m) => s + len(sub(j[m], start[m])), 0);
+    if (d > bestD) {
+      bestD = d;
+      best = j;
+    }
+  }
+  return best;
 }
 function renderFigure(spec, title) {
   const { list, duration } = frames(spec);
   const front = spec.view === "front";
-  const limb2 = `fill="none" stroke-linecap="round" stroke-linejoin="round"`;
-  const nearAttrs = `${limb2} stroke="${COLOR.body}" stroke-width="5"`;
-  const farAttrs = front ? nearAttrs : `${limb2} stroke="${COLOR.far}" stroke-width="5" opacity="0.55"`;
-  const far = [
-    animatedLine(list, duration, (j) => [j.hipF, j.kneeF, j.ankleF, j.toeF], farAttrs),
-    animatedLine(list, duration, (j) => [j.shoulderF, j.elbowF, j.handF], farAttrs)
-  ];
-  const torso = front ? animatedLine(list, duration, (j) => [j.shoulderF, j.shoulderN, j.shoulder, j.hip, j.hipF, j.hipN], `${limb2} stroke="${COLOR.body}" stroke-width="6"`) : animatedLine(list, duration, (j) => [j.hip, j.shoulder], `${limb2} stroke="${COLOR.body}" stroke-width="7"`);
-  const near = [
-    animatedLine(list, duration, (j) => [j.hipN, j.kneeN, j.ankleN, j.toeN], nearAttrs),
-    animatedLine(list, duration, (j) => [j.shoulderN, j.elbowN, j.handN], nearAttrs)
-  ];
-  const neck = animatedLine(list, duration, (j) => [j.shoulder, j.head], `${limb2} stroke="${COLOR.body}" stroke-width="5"`);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}" role="img" aria-label="${escapeAttr(title)}"><defs><filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g>${spec.props.map(propSvg).join("")}</g><g filter="url(#glow)">${far.join("")}${torso}${neck}${animatedHead(list, duration)}${near.join("")}</g></svg>`;
+  const start = list[0].joints;
+  const end = endPose(spec);
+  const chains = {
+    legF: (j) => [j.hipF, j.kneeF, j.ankleF, j.toeF],
+    armF: (j) => [j.shoulderF, j.elbowF, j.handF],
+    torso: front ? (j) => [j.shoulderF, j.shoulderN, j.shoulder, j.hip, j.hipF, j.hipN] : (j) => [j.hip, j.shoulder],
+    neck: (j) => [j.shoulder, j.head],
+    legN: (j) => [j.hipN, j.kneeN, j.ankleN, j.toeN],
+    armN: (j) => [j.shoulderN, j.elbowN, j.handN]
+  };
+  const defs = Object.entries(chains).map(([id, pick2]) => limbDef(id, list, duration, pick2)).join("");
+  let ghost = "";
+  if (end) {
+    const g = (vs, w) => `<polyline points="${pts(vs)}" fill="none" stroke="${COLOR.body}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    ghost = `<g opacity="0.14">${Object.entries(chains).map(([id, pick2]) => g(pick2(end), id === "torso" ? WIDTH.torso : WIDTH.near)).join("")}<circle cx="${fmt(end.head[0])}" cy="${fmt(end.head[1])}" r="${SEG.head + 1}" fill="${COLOR.body}"/></g>`;
+  }
+  let motion = "";
+  const motionYs = [];
+  if (end && !spec.props.some((p) => p.kind === "arrow")) {
+    const disp = (j) => len(sub(end[j], start[j]));
+    const pickMax = (js) => js.reduce((a2, b2) => disp(b2) > disp(a2) ? b2 : a2);
+    const body = pickMax(["hip", "shoulder", "head"]);
+    const limb2 = pickMax(["handN", "ankleN"]);
+    const m = disp(limb2) > 1.6 * disp(body) ? limb2 : body;
+    let a = start[m];
+    let b = end[m];
+    if (len(sub(b, a)) > 10) {
+      const mid = scale(add(a, b), 0.5);
+      const d = sub(b, a);
+      const u = scale(d, 1 / len(d));
+      const half = Math.max(len(d), 26) / 2;
+      a = sub(mid, scale(u, half));
+      b = add(mid, scale(u, half));
+      let n = [-u[1], u[0]];
+      const centre = scale(add(start.hip, start.shoulder), 0.5);
+      if (n[0] * (mid[0] - centre[0]) + n[1] * (mid[1] - centre[1]) < 0) n = scale(n, -1);
+      const off = scale(n, 22);
+      const clamp = (v) => [Math.min(Math.max(v[0], 10), SIZE - 10), Math.min(Math.max(v[1], 10), GROUND - 4)];
+      const p0 = clamp(add(a, off));
+      const p1 = clamp(add(b, off));
+      motionYs.push(p0[1], p1[1]);
+      motion = arrow(p0, p1, 0);
+    }
+  }
+  const hasFloor = spec.props.some((p) => p.kind === "floor");
+  const shadow = hasFloor ? `<ellipse cx="${fmt(start.hip[0])}" cy="${GROUND + 5}" rx="30" ry="4" fill="#000" opacity="0.45">${animatedAttr(list, duration, "cx", (j) => j.hip[0])}</ellipse>` : "";
+  const headDef = `cx="${fmt(start.head[0])}" cy="${fmt(start.head[1])}" r="${SEG.head + 1}"`;
+  const head = `<circle ${headDef} fill="url(#head)" stroke="${INK}" stroke-width="2.5">` + animatedAttr(list, duration, "cx", (j) => j.head[0]) + animatedAttr(list, duration, "cy", (j) => j.head[1]) + `</circle>`;
+  const farOpacity = front ? 1 : 0.6;
+  const farPaint = front ? "url(#body)" : "url(#bodyFar)";
+  const [vx, vy, vw, vh] = frameBox(spec, list, motionYs);
+  const panel = `x="${vx}" y="${vy}" width="${vw}" height="${vh}"`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vx} ${vy} ${vw} ${vh}" width="${vw}" height="${vh}" role="img" aria-label="${escapeAttr(title)}"><defs><radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="#0f2547"/><stop offset="1" stop-color="#040a17"/></radialGradient><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#1d3b6b" stroke-width="0.6" opacity="0.55"/></pattern><linearGradient id="body" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${SIZE}"><stop offset="0" stop-color="#9ff0ff"/><stop offset="0.5" stop-color="#4fd8ff"/><stop offset="1" stop-color="#1f8fe0"/></linearGradient><linearGradient id="bodyFar" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${SIZE}"><stop offset="0" stop-color="#4fa8ff"/><stop offset="1" stop-color="#1d5fb8"/></linearGradient><linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${SIZE}" y2="0"><stop offset="0" stop-color="#3d6db0"/><stop offset="0.5" stop-color="#9cc8ff"/><stop offset="1" stop-color="#3d6db0"/></linearGradient><radialGradient id="head" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#dffaff"/><stop offset="0.45" stop-color="#4fd8ff"/><stop offset="1" stop-color="#1667c4"/></radialGradient><filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` + defs + `</defs><rect ${panel} rx="10" fill="url(#bg)"/><rect ${panel} rx="10" fill="url(#grid)"/><rect x="${vx + 1}" y="${vy + 1}" width="${vw - 2}" height="${vh - 2}" rx="10" fill="none" stroke="${COLOR.body}" stroke-width="1" opacity="0.35"/>` + shadow + `<g>${spec.props.map(propSvg).join("")}</g>` + ghost + `<g filter="url(#glow)">` + limbUse("legF", WIDTH.far, farPaint, farOpacity) + limbUse("armF", WIDTH.far, farPaint, farOpacity) + limbUse("torso", WIDTH.torso, "url(#body)") + limbUse("neck", WIDTH.neck, "url(#body)") + head + limbUse("legN", WIDTH.near, "url(#body)") + limbUse("armN", WIDTH.near, "url(#body)") + `</g>` + motion + `</svg>`;
+}
+function frameBox(spec, list, extraYs) {
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  const grow = (y) => {
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+  };
+  for (const y of extraYs) grow(y);
+  for (const f of list) for (const v of Object.values(f.joints)) grow(v[1]);
+  for (const f of list) grow(f.joints.head[1] - SEG.head - 2);
+  for (const p of spec.props) {
+    if (p.kind === "floor") grow(GROUND + 6);
+    else if (p.kind === "bar" || p.kind === "dipBars") grow(p.y - 4);
+    else if (p.kind === "box") {
+      grow(p.y);
+      grow(p.y + p.h);
+    } else if (p.kind === "pad") {
+      grow(p.y1);
+      grow(p.y2);
+    } else if (p.kind === "arrow") {
+      grow(p.from[1]);
+      grow(p.to[1]);
+    } else if (p.kind === "wall") grow(GROUND);
+  }
+  const pad = 16;
+  let top = Math.max(0, Math.floor(y0 - pad));
+  let bottom = Math.min(SIZE, Math.ceil(y1 + pad));
+  const minH = SIZE / 2;
+  if (bottom - top < minH) {
+    const extra = minH - (bottom - top);
+    top = Math.max(0, top - extra);
+    bottom = Math.min(SIZE, top + minH);
+  }
+  return [0, top, SIZE, bottom - top];
 }
 function escapeAttr(s) {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -1412,14 +1516,73 @@ function rankFor(state) {
   }
   return rank;
 }
-function nextRankNeeds(state) {
-  const i = RANKS.indexOf(state.rank);
-  const next = RANKS[i + 1];
+var reqLabel = (req) => req.test ? `${TEST_LABEL[req.test].replace(/ \(.*\)$/, "")} ${req.min}${req.test === "dead_hang" || req.test === "hollow_hold" || req.test === "l_sit" ? " s" : ""}` : `${LADDERS[req.ladder].name}: reach ${exercise(req.level).name}`;
+function rankChecklist(state) {
+  const next = RANKS[RANKS.indexOf(state.rank) + 1];
   if (!next) return null;
-  const missing = RANK_REQS[next].filter((req) => !meets(state, req)).map(
-    (req) => req.test ? `${TEST_LABEL[req.test]} \u2265 ${req.min}${req.test === "dead_hang" || req.test === "hollow_hold" || req.test === "l_sit" ? " s" : ""}` : `${LADDERS[req.ladder].name}: reach ${exercise(req.level).name}`
-  );
-  return { rank: next, missing };
+  const items = RANK_REQS[next].filter((req) => !(req.tower && !state.profile.equipment.tower)).map((req) => {
+    const item2 = { label: reqLabel(req), met: meets(state, req) };
+    if (req.test && state.best[req.test] !== void 0) item2.best = state.best[req.test];
+    return item2;
+  });
+  return { rank: next, items };
+}
+function nextRankNeeds(state) {
+  const c = rankChecklist(state);
+  return c ? { rank: c.rank, missing: c.items.filter((i) => !i.met).map((i) => i.label) } : null;
+}
+var questLabel = (type, session) => type === "training" ? `Training ${session ?? ""}`.trim() : type === "gate" ? "Gate" : "Recovery";
+function weekPlan(state, today) {
+  const monday = addDays(today, -((weekday(today) + 6) % 7));
+  const trainingsBefore = state.quests.filter((q) => q.type === "training" && q.date < today).length;
+  let futureTrainings = 0;
+  let gatePlanned = false;
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(monday, i);
+    const record = state.quests.find((q) => q.date === date);
+    if (record) return { date, label: questLabel(record.type, record.session), status: date === today ? "today" : "done" };
+    if (date < today) {
+      return { date, label: isTrainingDay(state, date) ? "Training" : "Recovery", status: date < state.startDate ? "before" : "missed" };
+    }
+    if (date === today) {
+      const q = questFor(state, date);
+      if (q.type === "gate") gatePlanned = true;
+      if (q.type === "training") futureTrainings++;
+      return { date, label: questLabel(q.type, q.session), status: "today" };
+    }
+    if (!isTrainingDay(state, date)) return { date, label: "Recovery", status: "planned" };
+    if (!gatePlanned && date >= state.nextGate && gateTestsFor(state).length) {
+      gatePlanned = true;
+      return { date, label: "Gate", status: "planned" };
+    }
+    const session = (trainingsBefore + futureTrainings) % 2 === 0 ? "A" : "B";
+    futureTrainings++;
+    return { date, label: `Training ${session}`, status: "planned" };
+  });
+}
+function ladderProgress(state) {
+  return TRACKED_LADDERS.map((id) => {
+    const levels = LADDERS[id].levels;
+    const at2 = state.levels[id];
+    const ex = exercise(levels[at2]);
+    const next = levels[at2 + 1] ? exercise(levels[at2 + 1]) : null;
+    const p = {
+      ladder: id,
+      name: LADDERS[id].name,
+      level: at2 + 1,
+      of: levels.length,
+      current: ex.name,
+      next: next?.name ?? null,
+      needs: next ? `${ex.sets} \xD7 ${ex.max}${ex.kind === "hold" ? " s" : ""}${ex.perSide ? " per side" : ""} in 2 sessions` : null,
+      top: Math.min(state.streaks[ex.id]?.top ?? 0, 2)
+    };
+    if (!hasEquipment(ex, state.profile)) p.held = ex.equipment === "tower" ? "needs the power tower" : "needs a chair or bench";
+    else {
+      const b = blockedBy(ex, state.injuries);
+      if (b) p.held = `${b.area.replace("_", " ")} pain ${b.pain}/10`;
+    }
+    return p;
+  });
 }
 var TEST_LABEL = {
   pullups: "Pull-ups (max, strict)",
@@ -1539,12 +1702,151 @@ function parseTime(v) {
   return `${m[1].padStart(2, "0")}:${m[2]}`;
 }
 
+// src/session.ts
+var TRIAL_REST = 120;
+var stepOf = (q, kind) => {
+  const s = {
+    kind,
+    exercise: q.exercise,
+    sets: kind === "work" ? q.sets : 1,
+    target: kind === "work" ? q.target : [q.target[0] ?? q.min],
+    done: [],
+    restSec: kind === "work" ? q.restSec : 0
+  };
+  if (q.ladder) s.ladder = q.ladder;
+  if (q.note) s.note = q.note;
+  return s;
+};
+function startSession(state, date, now) {
+  const a = state.active;
+  if (a && a.date === date) {
+    if (a.finished) throw new Error("Today's quest is already finished.");
+    return a;
+  }
+  const quest = questFor(state, date);
+  if (quest.done) throw new Error("Today's quest is already complete.");
+  const steps = quest.warmup.map((w) => stepOf(w, "warmup"));
+  if (quest.type === "gate") {
+    for (const t of quest.gateTests) {
+      steps.push({ kind: "trial", exercise: TEST_EXERCISE[t], test: t, sets: 1, target: [], done: [], restSec: TRIAL_REST });
+    }
+  } else {
+    for (const m of quest.main) steps.push(stepOf(m, quest.type === "recovery" ? "recovery" : "work"));
+  }
+  if (steps.length === 0) throw new Error("Nothing to do today with the current equipment and injuries.");
+  const session = { date, type: quest.type, steps, cursor: 0, startedAt: now.toISOString() };
+  if (quest.session) session.session = quest.session;
+  state.active = session;
+  return session;
+}
+function activeToday(state, date) {
+  return state.active && state.active.date === date ? state.active : null;
+}
+function running(state, date) {
+  const a = activeToday(state, date);
+  if (!a || a.finished) throw new Error("No quest in progress. Start it first (plugin_fitness_start).");
+  return a;
+}
+function restLeft(a, now) {
+  if (!a.restUntil) return 0;
+  return Math.max(0, Math.ceil((Date.parse(a.restUntil) - now.getTime()) / 1e3));
+}
+function startRest(a, now, seconds) {
+  if (seconds > 0) {
+    a.restUntil = new Date(now.getTime() + seconds * 1e3).toISOString();
+    a.restSec = seconds;
+  } else {
+    delete a.restUntil;
+    delete a.restSec;
+  }
+}
+function advance(state, a, date, now, rest) {
+  a.cursor++;
+  if (a.cursor >= a.steps.length) {
+    finish(state, a, date, now);
+    return;
+  }
+  startRest(a, now, rest);
+}
+function recordSet(state, date, now, value) {
+  const a = running(state, date);
+  const step2 = a.steps[a.cursor];
+  step2.done.push(Math.max(0, Math.round(value)));
+  if (step2.done.length < step2.sets) startRest(a, now, step2.restSec);
+  else advance(state, a, date, now, step2.restSec);
+  return a;
+}
+function skipRest(state, date) {
+  const a = running(state, date);
+  delete a.restUntil;
+  delete a.restSec;
+  return a;
+}
+function skipStep(state, date, now) {
+  const a = running(state, date);
+  a.steps[a.cursor].skipped = true;
+  advance(state, a, date, now, 0);
+  return a;
+}
+function endSession(state, date, now) {
+  const a = running(state, date);
+  for (const s of a.steps.slice(a.cursor)) if (s.done.length === 0) s.skipped = true;
+  finish(state, a, date, now);
+  return a;
+}
+function finish(state, a, date, now) {
+  delete a.restUntil;
+  delete a.restSec;
+  const levelBefore = hunterLevel(state.xp);
+  const rankBefore = state.rank;
+  const xpBefore = state.xp;
+  const summary = {
+    at: now.toISOString(),
+    outcome: "complete",
+    xp: 0,
+    levelBefore,
+    levelAfter: levelBefore,
+    rankBefore,
+    rankAfter: rankBefore,
+    unlocked: [],
+    recalibrated: [],
+    logged: [],
+    skipped: a.steps.filter((s) => s.skipped).map((s) => exercise(s.exercise).name)
+  };
+  if (a.type === "gate") {
+    const results = {};
+    for (const s of a.steps) if (s.kind === "trial" && s.test && s.done.length) results[s.test] = s.done[0];
+    if (Object.keys(results).length) {
+      clearGate(state, date, results);
+      summary.outcome = "gate";
+      summary.logged = a.steps.filter((s) => s.kind === "trial" && s.done.length).map((s) => ({ exercise: s.exercise, sets: s.done }));
+    } else {
+      summary.outcome = "abandoned";
+    }
+  } else {
+    const work = a.steps.filter((s) => s.kind === "work" && s.done.length > 0);
+    for (const s of work) {
+      const r = logSets(state, date, s.exercise, s.done);
+      summary.logged.push({ exercise: s.exercise, sets: s.done });
+      summary.unlocked.push(...r.unlocked.map((u) => exercise(u.to).name));
+      summary.recalibrated.push(...r.recalibrated.map((u) => exercise(u.to).name));
+    }
+    const didSomething = a.type === "recovery" ? a.steps.some((s) => s.done.length > 0) : work.length > 0;
+    if (didSomething) completeQuest(state, date);
+    else summary.outcome = "abandoned";
+  }
+  summary.xp = state.xp - xpBefore;
+  summary.levelAfter = hunterLevel(state.xp);
+  summary.rankAfter = state.rank;
+  a.finished = summary;
+}
+
 // src/text.ts
 var T = {
   awakening: "[SYSTEM] A new Hunter has been detected.\nThe System trains strength you can carry anywhere: pull, push, legs and core, with your own body weight. No heavy loads, no training to failure \u2014 every exercise climbs a ladder from easy to elite, and you climb it when you own it.\nRegister below. Your first training day is the Awakening Gate: a short test that places you on every ladder.",
-  trainingIntro: "Warm up first, then work through each exercise. Stop every set with about two reps left in the tank \u2014 clean reps only. Log your sets as you go; hit the top of the range twice and the next skill unlocks.",
+  trainingIntro: "Press START and the System walks you through it: warm-up, then every set with its target and the rest between sets. Stop each set with about two reps left in the tank \u2014 clean reps only. Everything is logged for you.",
   recoveryIntro: "Recovery day. Ten easy minutes of mobility keep the joints happy and the streak alive. A 30-minute walk counts as a bonus.",
-  gateIntro: "A Gate has opened. Warm up, then do one all-out set of each trial with strict form and full rest between them. The results place you on the ladders and decide your rank.",
+  gateIntro: "A Gate has opened: a short test. Warm up, then one all-out set of each trial with strict form and full rest between them. The results place you on the ladders and decide your rank.",
   deload: "Deload week: one set fewer, bottom of the range, no level-ups. Recovery is part of the plan.",
   questDone: "[SYSTEM] Quest complete. Rest well, Hunter.",
   questDoneShort: "\u2713 Completed today.",
@@ -1569,154 +1871,289 @@ function figureSvg(id) {
   }
   return svg;
 }
-var unit = (q) => q.kind === "hold" ? "s" : "reps";
-var range = (q) => `${q.sets} \xD7 ${q.min === q.max ? q.min : `${q.min}\u2013${q.max}`} ${unit(q)}${q.perSide ? " / side" : ""}`;
-function exerciseBlocks(q, opts) {
-  const ex = exercise(q.exercise);
-  const level = q.level ? ` \xB7 Lv ${q.level.at}/${q.level.of}` : "";
-  const caption = [
-    `Today: ${q.target.join(" \xB7 ")} ${unit(q)}${q.perSide ? " per side" : ""}${q.restSec ? ` \u2014 rest ${q.restSec} s between sets` : ""}`,
-    q.note ? `\u26A0 ${q.note}` : "",
-    q.logged ? `\u2713 Logged: ${q.logged.join(" \xB7 ")}` : ""
-  ].filter(Boolean).join("\n");
-  const blocks = [
-    {
-      type: "figure",
-      svg: figureSvg(ex.id),
-      alt: `${ex.name} \u2014 animated demonstration`,
-      title: `${opts.warmup ? "Warm-up \xB7 " : ""}${ex.name} \xB7 ${range(q)}${level}${q.logged ? " \u2713" : ""}`,
-      caption,
-      bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
-      size: "md",
-      collapsed: true
-    }
-  ];
-  if (opts.log) {
-    blocks.push({
-      type: "form",
-      tool: "plugin_fitness_log",
-      button: q.logged ? "Log again" : `Log ${ex.name}`,
-      args: { exercise: ex.id },
-      fields: q.target.map((t, i) => ({
-        name: `set${i + 1}`,
-        label: `Set ${i + 1}`,
-        kind: "number",
-        min: 0,
-        max: 600,
-        unit: unit(q),
-        value: q.logged?.[i] ?? t
-      }))
-    });
-  }
-  return blocks;
+var unitOf = (ex) => ex.kind === "hold" ? "s" : "reps";
+var DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+var dayName = (date) => DAY[(/* @__PURE__ */ new Date(`${date}T12:00:00Z`)).getUTCDay()];
+var mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+var questTitle = (type, session) => type === "gate" ? "Gate" : type === "training" ? `Training ${session ?? ""}`.trim() : "Recovery";
+function figure(ex, opts) {
+  const b = {
+    type: "figure",
+    svg: figureSvg(ex.id),
+    alt: `${ex.name} \u2014 animated demonstration`,
+    bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
+    size: opts.size ?? "md"
+  };
+  if (opts.title) b.title = opts.title;
+  if (opts.caption) b.caption = opts.caption;
+  if (opts.collapsed && opts.title) b.collapsed = true;
+  return b;
 }
-function renderPage(state, today, defaultTimezone) {
-  if (!state) return awakening(defaultTimezone);
+function renderPage(state, today, now, defaultTimezone) {
+  if (!state) return { blocks: awakening(defaultTimezone) };
+  const active = activeToday(state, today);
+  const running2 = active && !active.finished ? active : null;
   const blocks = [];
-  const level = hunterLevel(state.xp);
-  const s = stats(state, today);
-  const st = streak(state, today);
-  blocks.push({ type: "heading", text: "Status Window" });
+  let refreshSeconds;
+  if (running2) {
+    const r = runningBlocks(running2, now);
+    blocks.push(...r.blocks);
+    refreshSeconds = r.refreshSeconds;
+  } else if (active?.finished) {
+    blocks.push(...completeBlocks(state, active, today));
+  } else {
+    blocks.push(...startBlocks(state, today));
+  }
+  if (running2) return refreshSeconds ? { blocks, refreshSeconds } : { blocks };
+  blocks.push({ type: "divider" }, ...statusBlocks(state, today));
+  blocks.push({ type: "divider" }, ...pathBlocks(state, today));
+  blocks.push({ type: "divider" }, ...codexBlocks(state));
+  blocks.push({ type: "divider" }, ...historyBlocks(state, today));
+  blocks.push({ type: "divider" }, { type: "heading", text: "Profile" }, profileForm(state), painForm());
+  return { blocks };
+}
+function startBlocks(state, today) {
+  const q = questFor(state, today);
+  const title = `Daily Quest \u2014 ${dayName(today)} \xB7 ${questTitle(q.type, q.session)}`;
+  if (q.done) {
+    const next = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
+    return [
+      { type: "heading", text: title },
+      { type: "text", tone: "ok", text: `${T.questDone}
+Tomorrow: ${next?.label ?? "Recovery"}.` }
+    ];
+  }
+  const items = q.type === "gate" ? q.gateTests.map((t) => ({ title: TEST_LABEL[t], subtitle: "one all-out set", badge: "trial" })) : q.main.map((m) => ({
+    title: m.name,
+    subtitle: `${m.sets} \xD7 ${m.target.join("\xB7")} ${m.kind === "hold" ? "s" : "reps"}${m.perSide ? " per side" : ""}${m.note ? ` \u2014 ${m.note}` : ""}`,
+    badge: m.level ? `Lv ${m.level.at}/${m.level.of}` : "",
+    tone: m.note ? "warn" : "default"
+  }));
+  const minutes = q.type === "recovery" ? 10 : q.type === "gate" ? 25 : 10 + q.main.reduce((s, m) => s + Math.round(m.sets * (m.restSec + 40) / 60), 0);
+  const blocks = [
+    { type: "heading", text: title },
+    { type: "text", text: q.type === "gate" ? T.gateIntro : q.type === "training" ? T.trainingIntro : T.recoveryIntro }
+  ];
+  if (q.deload && q.type === "training") blocks.push({ type: "text", tone: "warn", text: T.deload });
   blocks.push({
     type: "stats",
     items: [
-      { label: "Hunter", value: state.profile.name || "Unnamed", hint: `Day ${daysBetween(state.startDate, today) + 1}` },
-      { label: "Rank", value: state.rank, tone: "ok" },
-      { label: "Level", value: String(level), hint: `${state.xp} XP` },
-      { label: "Streak", value: `${st} day${st === 1 ? "" : "s"}`, tone: st > 0 ? "ok" : "muted" },
-      { label: "STR", value: String(s.STR), hint: "pull \xB7 push \xB7 dip" },
-      { label: "AGI", value: String(s.AGI), hint: "core \xB7 L-sit" },
-      { label: "VIT", value: String(s.VIT), hint: "legs \xB7 hinge" },
-      { label: "END", value: String(s.END), hint: "hang \xB7 consistency" }
+      { label: "Quest", value: questTitle(q.type, q.session) },
+      { label: q.type === "gate" ? "Trials" : "Exercises", value: String(items.length), hint: q.warmup.length ? `+ ${q.warmup.length} warm-up` : void 0 },
+      { label: "Time", value: `~${minutes} min` },
+      { label: "Reward", value: `+${q.type === "gate" ? 300 : q.type === "training" ? 100 : 30} XP`, tone: "ok" }
     ]
   });
-  const base = xpForLevel(level);
-  blocks.push({ type: "progress", label: `Level ${level} \u2192 ${level + 1}`, value: state.xp - base, max: xpForLevel(level + 1) - base, hint: `${state.xp - base} / ${xpForLevel(level + 1) - base} XP` });
-  const needs = nextRankNeeds(state);
-  const gateIn = daysBetween(today, state.nextGate);
+  blocks.push({ type: "list", items });
+  if (q.type === "gate") {
+    const left = GATE_TESTS.filter((t) => !q.gateTests.includes(t));
+    if (left.length) blocks.push({ type: "text", tone: "warn", text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, "")).join(", ")}. They join a later Gate.` });
+  }
+  if (q.skipped.length) {
+    blocks.push({ type: "list", items: q.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} rests today`, subtitle: x.reason, tone: "warn" })) });
+  }
+  blocks.push({ type: "actions", buttons: [{ label: q.type === "gate" ? "\u25B6  ENTER THE GATE" : "\u25B6  START QUEST", tool: "plugin_fitness_start", variant: "primary" }] });
+  return blocks;
+}
+function stepLabel(s) {
+  return s.kind === "warmup" ? "Warm-up" : s.kind === "trial" ? "Gate trial" : s.kind === "recovery" ? "Mobility" : "Exercise";
+}
+function runningBlocks(a, now) {
+  const step2 = a.steps[a.cursor];
+  const ex = exercise(step2.exercise);
+  const totalSets = a.steps.reduce((n, s) => n + s.sets, 0);
+  const doneSets = a.steps.reduce((n, s) => n + (s.skipped ? s.sets : s.done.length), 0);
+  const blocks = [
+    { type: "heading", text: `${questTitle(a.type, a.session)} \u2014 step ${a.cursor + 1} of ${a.steps.length}` },
+    { type: "progress", label: `${doneSets} of ${totalSets} sets`, value: doneSets, max: totalSets }
+  ];
+  const rest = restLeft(a, now);
+  const setNo = step2.done.length + 1;
+  const target = step2.target[step2.done.length] ?? step2.target[step2.target.length - 1];
+  const perSide = ex.perSide ? " per side" : "";
+  if (rest > 0) {
+    blocks.push({
+      type: "stats",
+      items: [
+        { label: "Rest", value: mmss(rest), tone: "ok", hint: "breathe, shake it out" },
+        { label: "Next", value: `${ex.name}`, hint: `set ${setNo} of ${step2.sets}${target !== void 0 ? ` \xB7 ${target} ${unitOf(ex)}${perSide}` : ""}` }
+      ]
+    });
+    blocks.push({ type: "progress", label: "Rest", value: (a.restSec ?? rest) - rest, max: a.restSec ?? rest, hint: mmss(rest) });
+    blocks.push({ type: "actions", buttons: [{ label: "Skip rest  \u23ED", tool: "plugin_fitness_skip", args: { what: "rest" }, variant: "primary" }] });
+    blocks.push(figure(ex, { title: `Next up: ${ex.name}`, size: "md" }));
+    return { blocks, refreshSeconds: 2 };
+  }
+  const what = step2.kind === "trial" ? `ONE all-out set with clean form. Stop when the form breaks.` : `Set ${setNo} of ${step2.sets} \u2014 target ${target} ${unitOf(ex)}${perSide}${ex.kind === "hold" ? " (hold)" : ""}`;
+  blocks.push(figure(ex, { title: `${stepLabel(step2)} \xB7 ${ex.name}`, caption: [what, step2.note ? `\u26A0 ${step2.note}` : ""].filter(Boolean).join("\n"), size: "lg" }));
   blocks.push({
-    type: "text",
-    tone: "muted",
-    text: [
-      needs ? `Next rank ${needs.rank}: ${needs.missing.length ? needs.missing.join(", ") : "all requirements met \u2014 clear the next Gate"}` : "Maximum rank reached.",
-      gateIn <= 0 ? "A Gate is open: it replaces your next training quest." : `Next Gate in ${gateIn} day${gateIn === 1 ? "" : "s"} (${state.nextGate}).`
-    ].join("\n")
+    type: "form",
+    tool: "plugin_fitness_set",
+    button: step2.kind === "trial" ? "\u2713  Record" : step2.sets > 1 ? `\u2713  Set ${setNo} done` : "\u2713  Done",
+    fields: [
+      {
+        name: "value",
+        label: ex.kind === "hold" ? "Seconds held" : `Reps done${perSide}`,
+        kind: "number",
+        min: 0,
+        max: 900,
+        unit: unitOf(ex),
+        ...step2.kind === "trial" ? { required: true } : { value: target }
+      }
+    ]
   });
+  blocks.push({
+    type: "actions",
+    buttons: [
+      { label: "Skip this exercise", tool: "plugin_fitness_skip", args: { what: "exercise" }, confirm: `Skip ${ex.name}?` },
+      { label: "End quest", tool: "plugin_fitness_end", variant: "danger", confirm: "End the quest now? What you did so far is saved." }
+    ]
+  });
+  const upcoming = a.steps.slice(a.cursor + 1);
+  if (upcoming.length) {
+    blocks.push({
+      type: "list",
+      items: upcoming.map((s) => ({
+        title: exercise(s.exercise).name,
+        subtitle: s.kind === "trial" ? "Gate trial \xB7 one all-out set" : `${stepLabel(s)} \xB7 ${s.sets} \xD7 ${s.target.join("\xB7")} ${unitOf(exercise(s.exercise))}`,
+        tone: "muted"
+      }))
+    });
+  }
+  return { blocks };
+}
+function completeBlocks(state, a, today) {
+  const f = a.finished;
+  const blocks = [];
+  if (f.outcome === "abandoned") {
+    blocks.push({ type: "heading", text: "Quest ended" }, { type: "text", tone: "warn", text: "Nothing was logged, so the quest stays open. Start it again any time today." });
+    blocks.push({ type: "actions", buttons: [{ label: "\u25B6  START AGAIN", tool: "plugin_fitness_start", variant: "primary" }] });
+    return blocks;
+  }
+  blocks.push({ type: "heading", text: f.outcome === "gate" ? "Gate cleared" : "Quest complete" });
+  blocks.push({
+    type: "stats",
+    items: [
+      { label: "XP gained", value: `+${f.xp}`, tone: "ok" },
+      { label: "Level", value: f.levelAfter > f.levelBefore ? `${f.levelBefore} \u2192 ${f.levelAfter}` : String(f.levelAfter), tone: f.levelAfter > f.levelBefore ? "ok" : "default" },
+      { label: "Rank", value: f.rankAfter !== f.rankBefore ? `${f.rankBefore} \u2192 ${f.rankAfter}` : f.rankAfter, tone: f.rankAfter !== f.rankBefore ? "ok" : "default" },
+      { label: "Streak", value: `${streak(state, today)} days` }
+    ]
+  });
+  const items = [
+    ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: "new", tone: "ok" })),
+    ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: "build the base, then climb again", tone: "warn" })),
+    ...f.logged.map((l) => ({ title: exercise(l.exercise).name, subtitle: l.sets.join(" \xB7 ") })),
+    ...f.skipped.map((n) => ({ title: `${n} \u2014 skipped`, tone: "muted" }))
+  ];
+  if (items.length) blocks.push({ type: "list", items });
+  const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
+  blocks.push({ type: "text", text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? "Recovery"}.` });
+  return blocks;
+}
+function statusBlocks(state, today) {
+  const level = hunterLevel(state.xp);
+  const s = stats(state, today);
+  const st = streak(state, today);
+  const base = xpForLevel(level);
+  const blocks = [
+    { type: "heading", text: "Status Window" },
+    {
+      type: "stats",
+      items: [
+        { label: "Hunter", value: state.profile.name || "Unnamed", hint: `Day ${daysBetween(state.startDate, today) + 1}` },
+        { label: "Rank", value: state.rank, tone: "ok" },
+        { label: "Level", value: String(level), hint: `${state.xp} XP` },
+        { label: "Streak", value: `${st} day${st === 1 ? "" : "s"}`, tone: st > 0 ? "ok" : "muted" },
+        { label: "STR", value: String(s.STR), hint: "pull \xB7 push \xB7 dip" },
+        { label: "AGI", value: String(s.AGI), hint: "core \xB7 L-sit" },
+        { label: "VIT", value: String(s.VIT), hint: "legs \xB7 hinge" },
+        { label: "END", value: String(s.END), hint: "hang \xB7 consistency" }
+      ]
+    },
+    { type: "progress", label: `Level ${level} \u2192 ${level + 1}`, value: state.xp - base, max: xpForLevel(level + 1) - base, hint: `${state.xp - base} / ${xpForLevel(level + 1) - base} XP` }
+  ];
   if (state.injuries.length) {
     blocks.push({
       type: "list",
       items: state.injuries.map((i) => ({
         title: `${i.side === "both" ? "" : `${i.side} `}${i.area.replace("_", " ")} \u2014 ${i.pain}/10`,
-        subtitle: `since ${i.since}${i.note ? ` \xB7 ${i.note}` : ""} \xB7 ${i.pain <= 2 ? "train, stay below pain" : i.pain <= 4 ? "light work only" : "rest this area"}`,
+        subtitle: `since ${i.since}${i.note ? ` \xB7 ${i.note}` : ""} \xB7 ${i.pain <= 2 ? "train, stay below pain" : i.pain <= 4 ? "light work only" : "rest this area"} \xB7 update it in the Profile section`,
         badge: "Status effect",
         tone: i.pain >= 5 ? "error" : "warn"
       }))
     });
   }
-  const quest = questFor(state, today);
-  const title = quest.type === "gate" ? "Gate" : quest.type === "training" ? `Daily Quest \u2014 Training ${quest.session}` : "Daily Quest \u2014 Recovery";
-  blocks.push({ type: "divider" });
-  blocks.push({ type: "heading", text: title });
-  blocks.push({ type: "text", text: questIntro(quest.type, quest.deload, quest.done) });
-  for (const w of quest.warmup) blocks.push(...exerciseBlocks(w, { log: false, warmup: true }));
-  for (const m of quest.main) blocks.push(...exerciseBlocks(m, { log: quest.type === "training" && !quest.done }));
-  if (quest.skipped.length) {
+  return blocks;
+}
+function pathBlocks(state, today) {
+  const week = weekPlan(state, today);
+  const mark = { done: "\u2713", today: "\u25B6", planned: "", missed: "\u2717", before: "" };
+  const blocks = [
+    { type: "heading", text: "Your Path" },
+    {
+      type: "table",
+      columns: week.map((d) => `${dayName(d.date)} ${d.date.slice(8)}.`),
+      rows: [week.map((d) => `${mark[d.status]} ${d.label}`.trim())]
+    },
+    {
+      type: "text",
+      tone: "muted",
+      text: `Training days: ${formatDays(state.profile.trainingDays)} at ${state.profile.questTime}. Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week.`
+    }
+  ];
+  blocks.push({
+    type: "list",
+    items: ladderProgress(state).map((p) => ({
+      title: `${p.name}: ${p.current}`,
+      subtitle: p.held ? `On hold \u2014 ${p.held}. A lighter exercise stands in until then.` : p.next ? `Next: ${p.next} \u2014 ${p.needs} (${p.top}/2 done)` : "Top of this ladder \u2014 keep it sharp.",
+      badge: `${p.level}/${p.of}`,
+      tone: p.held ? "warn" : p.top > 0 ? "ok" : "default"
+    }))
+  });
+  const check = rankChecklist(state);
+  const gateIn = daysBetween(today, state.nextGate);
+  if (check) {
     blocks.push({
       type: "list",
-      items: quest.skipped.map((x) => ({ title: `${LADDERS[x.ladder].name} skipped`, subtitle: x.reason, tone: "warn" }))
+      items: check.items.map((i) => ({
+        title: `${i.met ? "\u2713" : "\u25CB"} ${i.label}`,
+        subtitle: i.best !== void 0 ? `best so far: ${i.best}` : void 0,
+        tone: i.met ? "ok" : "default"
+      })),
+      empty: "All requirements met."
     });
-  }
-  if (quest.type === "gate" && !quest.done) {
-    for (const t of quest.gateTests) {
-      const ex = exercise(TEST_EXERCISE[t]);
-      blocks.push({
-        type: "figure",
-        svg: figureSvg(ex.id),
-        alt: `${ex.name} \u2014 animated demonstration`,
-        title: `Trial \xB7 ${TEST_LABEL[t]}`,
-        caption: `One all-out set of ${ex.name} with clean form. Stop when the form breaks and note the ${ex.kind === "hold" ? "seconds" : "reps"}.`,
-        bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
-        size: "md",
-        collapsed: false
-      });
-    }
-    const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
-    if (left.length) {
-      blocks.push({
-        type: "text",
-        tone: "warn",
-        text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, "")).join(", ")}. They join a later Gate.`
-      });
-    }
     blocks.push({
-      type: "form",
-      title: "Gate trials \u2014 one all-out set each, strict form, full rest between",
-      tool: "plugin_fitness_gate",
-      button: "Clear the Gate",
-      fields: quest.gateTests.map((t) => ({ name: t, label: TEST_LABEL[t], kind: "number", min: 0, max: 600, unit: t === "pullups" || t === "pushups" || t === "dips" ? "reps" : "s" }))
+      type: "text",
+      tone: "muted",
+      text: `Rank ${check.rank} needs everything above. Ranks are decided at Gates \u2014 ${gateIn <= 0 ? "one is open now" : `next Gate on ${state.nextGate} (in ${gateIn} day${gateIn === 1 ? "" : "s"})`}.`
     });
-  } else if (quest.done) {
-    blocks.push({ type: "text", tone: "ok", text: T.questDone });
   } else {
-    blocks.push({ type: "actions", buttons: [{ label: "Complete Quest", tool: "plugin_fitness_complete", variant: "primary" }] });
+    blocks.push({ type: "text", tone: "ok", text: "Rank S. There is nothing above you." });
   }
-  blocks.push({ type: "divider" });
-  blocks.push({ type: "heading", text: "Skills" });
-  for (const id of TRACKED_LADDERS) {
-    const ladder = LADDERS[id];
-    const at2 = state.levels[id];
-    const next = ladder.levels[at2 + 1];
-    blocks.push({
-      type: "progress",
-      label: `${ladder.name}: ${exercise(ladder.levels[at2]).name}`,
-      value: at2 + 1,
-      max: ladder.levels.length,
-      hint: next ? `next: ${exercise(next).name}` : "mastered"
+  return blocks;
+}
+function codexBlocks(state) {
+  const blocks = [{ type: "heading", text: "Skill Codex" }, { type: "text", tone: "muted", text: "Every exercise in the System. Open one to see how it moves." }];
+  const seen = /* @__PURE__ */ new Set();
+  for (const l of Object.values(LADDERS)) {
+    l.levels.forEach((id, i) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const ex = exercise(id);
+      const tracked = l.id !== "pull_floor" ? state.levels[l.id] : 0;
+      const tag = i < tracked ? " \u2713" : i === tracked ? " \u25C0 you are here" : "";
+      blocks.push(figure(ex, { title: `${l.name} ${i + 1} \xB7 ${ex.name}${tag}`, caption: `${ex.sets} \xD7 ${ex.min}\u2013${ex.max} ${unitOf(ex)}${ex.perSide ? " per side" : ""}`, collapsed: true }));
     });
   }
-  if (!state.profile.equipment.tower) blocks.push({ type: "text", tone: "muted", text: T.noTower });
-  blocks.push({ type: "divider" });
-  blocks.push({ type: "heading", text: "History" });
+  for (const ex of EXERCISES) {
+    if (seen.has(ex.id)) continue;
+    blocks.push(figure(ex, { title: `Mobility \xB7 ${ex.name}`, caption: `${ex.min} ${unitOf(ex)}${ex.perSide ? " per side" : ""}`, collapsed: true }));
+  }
+  return blocks;
+}
+function historyBlocks(state, today) {
+  const blocks = [{ type: "heading", text: "History" }];
   const weeks = Array.from({ length: 12 }, (_, i) => addDays(today, -7 * (11 - i)));
   const volume = weeks.map((end) => {
     const start = addDays(end, -6);
@@ -1745,32 +2182,18 @@ function renderPage(state, today, defaultTimezone) {
     type: "table",
     columns: ["Date", "Exercise", "Sets"],
     rows: [...state.logs].reverse().slice(0, 15).map((l) => [l.date, exercise(l.exercise).name, l.sets.join(" \xB7 ")]),
-    empty: "No sets logged yet."
+    empty: "No sets logged yet \u2014 they appear here after your first quest."
   });
   blocks.push({
     type: "list",
     items: [...state.events].reverse().slice(0, 8).map((e) => ({ title: e.text, subtitle: e.date, badge: e.kind.replace("_", " ") })),
     empty: "The System log is empty."
   });
-  blocks.push({ type: "divider" });
-  blocks.push({ type: "heading", text: "Profile" });
-  blocks.push(profileForm(state));
-  blocks.push(painForm());
   return blocks;
-}
-function questIntro(type, deload, done) {
-  const lines = [];
-  if (type === "gate") lines.push(T.gateIntro);
-  else if (type === "training") lines.push(T.trainingIntro);
-  else lines.push(T.recoveryIntro);
-  if (deload && type === "training") lines.push(T.deload);
-  if (done) lines.push(T.questDoneShort);
-  return lines.join("\n");
 }
 function profileForm(state) {
   const p = state.profile;
-  const last = [...state.body].reverse();
-  const waist = last.find((b) => b.waistCm !== void 0)?.waistCm;
+  const waist = [...state.body].reverse().find((b) => b.waistCm !== void 0)?.waistCm;
   return {
     type: "form",
     title: "Hunter profile \u2014 change anything, the System adapts",
@@ -2073,10 +2496,83 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
         exercises: q.main.map(describeItem),
         skipped: q.skipped,
         gate_tests: q.gateTests,
-        how_to_finish: q.type === "gate" ? "Log the trials with plugin_fitness_gate." : "Log each exercise with plugin_fitness_log, then plugin_fitness_complete.",
+        how_to_do_it: "Guided: plugin_fitness_start, then plugin_fitness_set after every set (the page shows each step with its animation). " + (q.type === "gate" ? "Or log all trial results at once with plugin_fitness_gate." : "Or log whole exercises with plugin_fitness_log and finish with plugin_fitness_complete."),
+        in_progress: describeSession(s, date),
         page: PAGE_URL
       };
     }
+  });
+  const describeSession = (s, date) => {
+    const a = activeToday(s, date);
+    if (!a) return { running: false };
+    if (a.finished) return { running: false, finished: a.finished, page: PAGE_URL };
+    const step2 = a.steps[a.cursor];
+    const ex = BY_ID.get(step2.exercise);
+    return {
+      running: true,
+      quest: a.type,
+      session: a.session ?? null,
+      step: a.cursor + 1,
+      of: a.steps.length,
+      current: {
+        kind: step2.kind,
+        exercise: ex.id,
+        name: ex.name,
+        set: step2.done.length + 1,
+        sets: step2.sets,
+        target: step2.target[step2.done.length] ?? null,
+        unit: ex.kind === "hold" ? "seconds" : "reps",
+        per_side: ex.perSide === true,
+        cues: ex.cues,
+        avoid: ex.mistake,
+        ...step2.note ? { note: step2.note } : {}
+      },
+      rest_seconds_left: restLeft(a, clock.now()),
+      next: a.steps.slice(a.cursor + 1).map((x) => BY_ID.get(x.exercise).name),
+      page: PAGE_URL
+    };
+  };
+  registry.registerTool({
+    name: "plugin_fitness_start",
+    description: "Start (or resume) today's quest as a guided session: warm-up, then each set with its target and the rest between sets. Report each set with plugin_fitness_set. The dashboard page shows the same steps with animations.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    handler: () => mutate((s, date) => {
+      startSession(s, date, clock.now());
+      return describeSession(s, date);
+    })
+  });
+  registry.registerTool({
+    name: "plugin_fitness_set",
+    description: "Report the set just done in the running quest: reps, or seconds for holds (for a Gate trial: the all-out result). Moves to the rest, the next set or the next exercise; after the last step the quest is logged and completed.",
+    inputSchema: { type: "object", properties: { value: { type: "number", description: "Reps done or seconds held" } }, required: ["value"], additionalProperties: false },
+    handler: (args) => {
+      const value = optNum(args.value, "value", 0, 900);
+      if (value === void 0) throw new Error("value is required (reps or seconds)");
+      return mutate((s, date) => {
+        recordSet(s, date, clock.now(), value);
+        return describeSession(s, date);
+      });
+    }
+  });
+  registry.registerTool({
+    name: "plugin_fitness_skip",
+    description: "In the running quest: skip the current rest (what: 'rest') or the current exercise (what: 'exercise').",
+    inputSchema: { type: "object", properties: { what: { type: "string", enum: ["rest", "exercise"] } }, required: ["what"], additionalProperties: false },
+    handler: (args) => mutate((s, date) => {
+      if (args.what === "rest") skipRest(s, date);
+      else if (args.what === "exercise") skipStep(s, date, clock.now());
+      else throw new Error("what must be 'rest' or 'exercise'");
+      return describeSession(s, date);
+    })
+  });
+  registry.registerTool({
+    name: "plugin_fitness_end",
+    description: "End the running quest now. Sets done so far are logged; the quest counts as complete if any real work was done.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    handler: () => mutate((s, date) => {
+      endSession(s, date, clock.now());
+      return describeSession(s, date);
+    })
   });
   registry.registerTool({
     name: "plugin_fitness_log",
@@ -2293,7 +2789,7 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
         ...n,
         url: PAGE_URL,
         tag: `fitness-${date}`,
-        ...q.type === "recovery" ? { actions: [{ label: "Done", tool: "plugin_fitness_complete", args: { date } }] } : {}
+        ...q.type === "recovery" && kind === "quest" ? { actions: [{ label: "Done", tool: "plugin_fitness_complete", args: { date } }] } : {}
       });
     } catch (err) {
       console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2326,7 +2822,7 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
       theme: "hologram",
       render: () => {
         const s = read();
-        return renderPage(s, today(s).date, defaultTz);
+        return renderPage(s, today(s).date, clock.now(), defaultTz);
       }
     });
   }

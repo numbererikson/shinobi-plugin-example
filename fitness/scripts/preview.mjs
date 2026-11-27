@@ -11,9 +11,16 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const only = process.argv.slice(2);
 const SNAPS = [0, 0.2, 0.4, 0.6, 0.8];
 
+// Inline SVGs share one id namespace: give every copy its own ids.
+let n = 0;
+const uniq = (svg) => {
+  const s = `-c${n++}`;
+  return svg.replace(/id="([^"]+)"/g, `id="$1${s}"`).replace(/href="#([^"]+)"/g, `href="#$1${s}"`).replace(/url\(#([^)]+)\)/g, `url(#$1${s})`);
+};
+
 const rows = EXERCISES.filter((e) => only.length === 0 || only.includes(e.id)).map((e) => {
   const svg = renderFigure(e.figure, e.name);
-  const snaps = SNAPS.map((f) => `<div class="cell" data-f="${f}">${svg}</div>`).join('');
+  const snaps = SNAPS.map((f) => `<div class="cell" data-f="${f}">${uniq(svg)}</div>`).join('');
   return `<section><h2>${e.id} — ${e.name}</h2><div class="row">${snaps}</div></section>`;
 });
 
@@ -22,7 +29,7 @@ const html = `<!doctype html><meta charset="utf-8"><title>figures</title>
 body{background:#050a16;color:#e3f2ff;font:13px system-ui;margin:12px}
 h2{font-size:13px;margin:10px 0 4px;color:#4fd8ff}
 .row{display:flex;gap:6px}.cell{background:#0a1428;border:1px solid #1d3b6b}
-svg{width:150px;height:150px;display:block}
+svg{width:150px;height:auto;display:block}
 </style>
 ${rows.join('\n')}
 <script>

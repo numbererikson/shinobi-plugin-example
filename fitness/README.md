@@ -15,6 +15,20 @@ a wall and a chair.
 
 ## What you get
 
+- **Guided quests.** Press **START QUEST** and the page walks you through it
+  one step at a time: a large animation of the exercise, "Set 2 of 3 — target
+  10 reps", a box for what you actually did and **✓ Set done**. Between sets a
+  rest countdown runs (with *Skip rest*), then the next set or exercise. At the
+  end everything is logged and the quest completes by itself: XP, level-ups,
+  unlocked skills and what tomorrow brings. *Skip this exercise* and *End
+  quest* are always there. The same flow works from chat
+  (`plugin_fitness_start` → `plugin_fitness_set` …).
+- **Your Path.** This week day by day (done / today / planned), every ladder
+  with exactly what unlocks its next step ("3 × 15 in 2 sessions — 1/2 done")
+  or why it is on hold, the next rank as a checklist with your best results,
+  and the next Gate.
+- **Skill Codex.** Every exercise with its animation, marked ✓ / "you are
+  here" on its ladder.
 - **Daily Quest.** Training days alternate session A (pull, push, legs, core)
   and B (pull, dip, hinge, L-sit, legs) of about 40 minutes with a short
   warm-up; other days are a 10-minute recovery quest (mobility). Every fifth
@@ -33,12 +47,16 @@ a wall and a chair.
   Awakening Gate.
 - **Status Window**: rank, level/XP, STR · AGI · VIT · END, streak, active
   status effects, what the next rank needs.
-- **Animated figures.** Every exercise has a looping stick-figure animation
-  plus three plain cues and the most common mistake — no video searching.
+- **Animated figures.** Every exercise has a looping animation — outlined,
+  shaded body on a hologram grid, a faint "ghost" of the end position, an
+  arrow showing the direction of the movement, framed tight around the
+  figure — plus three plain cues and the most common mistake. No video
+  searching.
 - **Dashboard page** (*Apps → The System*, right after Music) in the
-  `hologram` theme: status, today's quest with a log form per exercise, skill
-  ladders, history charts (reps per week, weight), Gate results, the System
-  log, and forms for the profile and pain.
+  `hologram` theme: today first (START / current step / rest / complete),
+  then the Status Window, Your Path, the Skill Codex, history charts (reps
+  per week, weight), Gate results, the System log, and the profile and pain
+  forms.
 - **Pushes**: the Daily Quest at your chosen time, an optional 19:30 warning
   if it is still open (recovery quests get a *Done* button), and a line in
   Shinobi's morning brief.
@@ -68,7 +86,11 @@ Then open *The System* and fill in the registration form, or tell Claude
 | --- | --- |
 | `plugin_fitness_setup` | Awaken a Hunter: age, height, weight, optional baseline (push-ups, pull-ups, squats…), training days, quest time, time zone, equipment, pain. `reset: true` starts over. |
 | `plugin_fitness_status` | Status Window: rank, level, XP, stats, streak, injuries, ladders, best results, next Gate, next-rank requirements. |
-| `plugin_fitness_today` | Today's quest with targets per set, rest, cues and adjustments. |
+| `plugin_fitness_today` | Today's quest with targets per set, rest, cues and adjustments (and the guided session in progress, if any). |
+| `plugin_fitness_start` | Start or resume today's quest as a guided session. |
+| `plugin_fitness_set` | Report the set just done (reps or seconds; a Gate trial's result). Moves to rest / next set / next exercise; the last one logs and completes the quest. |
+| `plugin_fitness_skip` | Skip the current rest (`what: "rest"`) or exercise (`what: "exercise"`). |
+| `plugin_fitness_end` | End the guided quest now; what was done is logged. |
 | `plugin_fitness_log` | Log one exercise's sets (`sets: [6, 5, 5]`, or `set1`…`set5`). Unlocks/recalibrates. |
 | `plugin_fitness_complete` | Complete today's training or recovery quest (XP, streak). |
 | `plugin_fitness_pain` | Report pain 0–10 for an area and side; 0 clears it. |

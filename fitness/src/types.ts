@@ -142,6 +142,55 @@ export interface HunterState {
   nextGate: string;
   /** Local dates the quest / evening warning were pushed. */
   notified: { quest?: string; warning?: string };
+  /** The guided quest in progress (or just finished) today. */
+  active?: ActiveSession;
+}
+
+export type StepKind = 'warmup' | 'work' | 'trial' | 'recovery';
+
+export interface SessionStep {
+  kind: StepKind;
+  exercise: string;
+  ladder?: LadderId;
+  test?: GateTest;
+  sets: number;
+  /** Target per set; empty for Gate trials (all-out). */
+  target: number[];
+  /** What was done per set so far. */
+  done: number[];
+  skipped?: boolean;
+  /** Rest after each set of this step, seconds. */
+  restSec: number;
+  note?: string;
+}
+
+export interface SessionSummary {
+  at: string;
+  outcome: 'complete' | 'gate' | 'abandoned';
+  xp: number;
+  levelBefore: number;
+  levelAfter: number;
+  rankBefore: Rank;
+  rankAfter: Rank;
+  unlocked: string[];
+  recalibrated: string[];
+  logged: { exercise: string; sets: number[] }[];
+  skipped: string[];
+}
+
+export interface ActiveSession {
+  date: string;
+  type: QuestType;
+  session?: 'A' | 'B';
+  steps: SessionStep[];
+  /** Index of the current step. */
+  cursor: number;
+  /** ISO time the current rest ends. */
+  restUntil?: string;
+  /** Seconds of the current rest (for the progress bar). */
+  restSec?: number;
+  startedAt: string;
+  finished?: SessionSummary;
 }
 
 export const STATE_KEY = 'hunter';
