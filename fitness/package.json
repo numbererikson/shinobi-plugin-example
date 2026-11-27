@@ -1,6 +1,6 @@
 {
   "name": "shinobi-plugin-fitness",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "The System — a bodyweight strength plugin for Shinobi: progression ladders, daily quests, ranks E→S, animated exercise figures, injury-aware substitutions. Power tower optional.",
   "type": "module",
   "main": "./dist/index.js",

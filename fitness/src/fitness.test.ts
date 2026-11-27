@@ -4,7 +4,8 @@ import { EXERCISES, LADDERS } from './exercises.js';
 import { renderFigure } from './figure.js';
 import { registerFitness, type Clock } from './index.js';
 import { renderPage } from './page.js';
-import { addDays, clearGate, completeQuest, isDeload, ladderProgress, logSets, newHunter, parseDays, parseTime, questFor, rankFor, reportPain, updateProfile, weekPlan } from './rules.js';
+import { addTreasure, checkRewards, chooseTitle, claimTreasure, journeyMapSvg, nextGoals, removeTreasure, thenVsNow, titleStatus, treasureGoal, treasureProgress } from './journey.js';
+import { addDays, clearGate, completeQuest, isDeload, ladderProgress, logSets, newHunter, parseDays, parseTime, questFor, rankFor, reportPain, streak, streakInfo, updateProfile, weekPlan } from './rules.js';
 import type { HunterState, PluginRegistry, Profile } from './types.js';
 
 // ---- fakes -----------------------------------------------------------------
@@ -180,7 +181,10 @@ describe('progression', () => {
     expect(logSets(s, MONDAY, 'pushup', [15, 15, 15]).unlocked).toEqual([]);
     const up = logSets(s, addDays(MONDAY, 2), 'pushup', [15, 16, 15]);
     expect(up.unlocked).toEqual([{ ladder: 'push', from: 'pushup', to: 'deep_pushup' }]);
-    expect(s.events.at(-1)!.text).toMatch(/Skill unlocked: Deep Push-up/);
+    // The unlock names the real-world feat, and its XP can level the hunter up.
+    expect(s.events.find((e) => e.kind === 'skill_unlocked')!.text).toMatch(/Skill unlocked: Deep Push-up on Handles\. \(\+150 XP\) Real world: /);
+    expect(s.events.at(-1)).toMatchObject({ kind: 'level_up' });
+    expect(s.counters).toMatchObject({ skills: 1 });
 
     logSets(s, addDays(MONDAY, 4), 'deep_pushup', [3, 2, 2]);
     const down = logSets(s, addDays(MONDAY, 7), 'deep_pushup', [4, 3, 2]);
@@ -312,11 +316,13 @@ describe('plugin', () => {
     host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, tower: true });
     const blocks = (page.render() as { blocks: { type: string; text?: string; tool?: string; buttons?: { tool: string }[] }[] }).blocks;
     const headings = blocks.filter((b) => b.type === 'heading').map((b) => b.text);
-    expect(headings).toEqual(['Daily Quest — Mon · Gate', 'Status Window', 'Your Path', 'Skill Codex', 'History', 'Profile']);
+    expect(headings).toEqual(['Daily Quest — Mon · Gate', 'Status Window', 'Journey', 'Your Path', 'Treasure', 'Titles', 'Skill Codex', 'History', 'Profile']);
     expect(blocks.find((b) => b.type === 'actions')?.buttons?.[0]?.tool).toBe('plugin_fitness_start');
-    // The codex shows every exercise once.
-    expect(blocks.filter((b) => b.type === 'figure')).toHaveLength(EXERCISES.length);
-    expect(blocks.filter((b) => b.type === 'form').map((b) => b.tool)).toEqual(['plugin_fitness_profile', 'plugin_fitness_pain']);
+    // Journey map + the codex: current and next exercise of each ladder (support hold is shared by dip and L-sit).
+    const figures = blocks.filter((b) => b.type === 'figure');
+    expect(figures).toHaveLength(1 + 13);
+    expect(blocks.length).toBeLessThanOrEqual(100);
+    expect(blocks.filter((b) => b.type === 'form').map((b) => b.tool)).toEqual(['plugin_fitness_treasure', 'plugin_fitness_profile', 'plugin_fitness_pain']);
     expect(renderPage(null, MONDAY, new Date(), 'UTC').blocks[0]).toMatchObject({ type: 'heading', text: 'Awakening' });
   });
 });
@@ -423,7 +429,8 @@ describe('rehab side quest and pain check', () => {
     expect(started.side_quest).toBe('Repair the shoulder');
     let r = started;
     while (r.running) r = host.call('plugin_fitness_set', { value: 10 });
-    expect(r.finished).toMatchObject({ outcome: 'complete', sideQuest: 'Repair the shoulder', xp: 30 + 20 });
+    // Recovery + side quest + the first title (The Awakened).
+    expect(r.finished).toMatchObject({ outcome: 'complete', sideQuest: 'Repair the shoulder', titles: ['The Awakened'], xp: 30 + 20 + 50 });
     const blocks = (host.pages[0]!.render() as { blocks: { type: string; title?: string; tool?: string; args?: Record<string, unknown> }[] }).blocks;
     const check = blocks.find((b) => b.type === 'form' && b.tool === 'plugin_fitness_pain');
     expect(check).toMatchObject({ title: 'How does your right shoulder feel now?', args: { area: 'shoulder', side: 'right' } });
@@ -474,5 +481,126 @@ describe('your path', () => {
     expect(push).toMatchObject({ current: 'Push-up', next: 'Deep Push-up on Handles', needs: '3 × 15 in 2 sessions', top: 1 });
     reportPain(s, MONDAY, 'shoulder', 'right', 4);
     expect(ladderProgress(s).find((p) => p.ladder === 'push')!.held).toBe('shoulder pain 4/10');
+    expect(push.feat).toMatch(/pressing/i);
+  });
+});
+
+// ---- motivation: shields, titles, treasure, walks, journey, pushes ------------------------------
+
+describe('motivation', () => {
+  /** Complete the quest on each of these day offsets from MONDAY. */
+  const doDays = (s: HunterState, days: number[]): void => {
+    for (const d of days) completeQuest(s, addDays(MONDAY, d));
+  };
+
+  it('every 7 days in a row earn a shield that covers one missed day', () => {
+    const s = tested();
+    doDays(s, [0, 1, 2, 3, 4, 5, 6]);
+    expect(streakInfo(s, addDays(MONDAY, 6))).toMatchObject({ days: 7, shields: 1, toNextShield: 7 });
+    // Day 7 missed: the shield covers it.
+    doDays(s, [8]);
+    expect(streakInfo(s, addDays(MONDAY, 8))).toMatchObject({ days: 8, shields: 0, shielded: [addDays(MONDAY, 7)] });
+    expect(weekPlan(s, addDays(MONDAY, 8))[0]!.status).toBe('shielded');
+    // Today still open does not break it; a second miss without a shield does.
+    expect(streakInfo(s, addDays(MONDAY, 9)).days).toBe(8);
+    expect(streakInfo(s, addDays(MONDAY, 10)).days).toBe(0);
+    expect(streak(s, addDays(MONDAY, 10))).toBe(0);
+  });
+
+  it('earns titles once, picks the newest unless one was chosen, and pushes them', () => {
+    const s = tested();
+    expect(checkRewards(s, MONDAY).titles).toEqual([]);
+    doDays(s, [0]);
+    const xp = s.xp;
+    expect(checkRewards(s, MONDAY).titles).toEqual(['The Awakened']);
+    expect(s.xp).toBe(xp + 50);
+    expect(s.activeTitle).toBe('awakened');
+    expect(checkRewards(s, MONDAY).titles).toEqual([]);
+    expect(s.outbox!.map((p) => p.title)).toContain('[SYSTEM] Title earned');
+    expect(() => chooseTitle(s, 'Apex')).toThrow(/not earned/);
+    expect(chooseTitle(s, 'The Awakened')).toBe('The Awakened');
+    // 4 days away, then back: a comeback, celebrated with its own title.
+    doDays(s, [4]);
+    expect(s.counters!.comebacks).toBe(1);
+    expect(checkRewards(s, addDays(MONDAY, 4)).titles).toEqual(['The Return']);
+    expect(s.activeTitle).toBe('awakened');
+    const status = titleStatus(s, addDays(MONDAY, 4));
+    expect(status.find((t) => t.id === 'iron_will')).toMatchObject({ earned: null, now: 1, of: 7 });
+  });
+
+  it('treasure unlocks with progress, pushes a Claimed button and can be claimed once', () => {
+    const s = tested();
+    expect(() => addTreasure(s, MONDAY, 'Shoes', 'rank', 'E')).toThrow(/rank must be/);
+    expect(() => addTreasure(s, MONDAY, 'Shoes', 'title', 'Grand Master')).toThrow(/title must be/);
+    expect(() => addTreasure(s, MONDAY, '  ', 'level', 3)).toThrow(/name/);
+    const shoes = addTreasure(s, MONDAY, 'New running shoes', 'level', '2');
+    const trip = addTreasure(s, MONDAY, 'Weekend trip', 'title', 'iron will');
+    expect(trip.target).toBe('iron_will');
+    expect(treasureGoal(trip)).toBe('Title: Iron Will');
+    expect(treasureProgress(s, shoes, MONDAY)).toEqual({ now: 1, of: 2 });
+    expect(() => claimTreasure(s, MONDAY, shoes.id)).toThrow(/still locked/);
+    s.xp = 100;
+    const r = checkRewards(s, MONDAY);
+    expect(r.treasures.map((t) => t.name)).toEqual(['New running shoes']);
+    const push = s.outbox!.find((p) => p.title === '[SYSTEM] Treasure unlocked')!;
+    expect(push.actions).toEqual([{ label: 'Claimed', tool: 'plugin_fitness_treasure', args: { action: 'claim', id: shoes.id } }]);
+    expect(claimTreasure(s, MONDAY, shoes.id).claimedAt).toBe(MONDAY);
+    expect(removeTreasure(s, trip.id).name).toBe('Weekend trip');
+    expect(s.treasures!.map((t) => t.id)).toEqual([shoes.id]);
+  });
+
+  it('a bonus walk is +20 XP once a day; a light day earns its own title', () => {
+    const clock = clockAt('2026-11-30T09:31:00Z');
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, pushups: 15, tower: true });
+    host.call('plugin_fitness_gate', { pushups: 15, hollow_hold: 30, dead_hang: 35, pullups: 4, dips: 2, l_sit: 0 });
+    expect(() => host.call('plugin_fitness_walk', { minutes: 10 })).toThrow(/at least 20/);
+    expect(host.call('plugin_fitness_walk')).toMatchObject({ already: false, xp: 20 });
+    expect(host.call('plugin_fitness_walk').already).toBe(true);
+
+    clock.set('2026-12-02T09:31:00Z'); // Wednesday: training
+    let r = host.call('plugin_fitness_start', { sleep: 'poor' });
+    while (r.running) r = host.call('plugin_fitness_set', { value: 8 });
+    const titles = host.call('plugin_fitness_title').titles.filter((t: { earned: string | null }) => t.earned).map((t: { name: string }) => t.name);
+    // 4 pull-ups at the Gate are the first strict pull-ups: Bar Breaker too.
+    expect(titles).toEqual(['The Awakened', 'Gatebreaker', 'Showed Up Anyway', 'Bar Breaker']);
+    expect(host.call('plugin_fitness_status')).toMatchObject({ title: 'Showed Up Anyway', streak_shields: 0 });
+  });
+
+  it('draws the journey map and compares day 1 with now', () => {
+    const s = tested();
+    clearGate(s, MONDAY, { pushups: 12, hollow_hold: 20 });
+    clearGate(s, addDays(MONDAY, 42), { pushups: 20, hollow_hold: 35 });
+    const svg = journeyMapSvg(s, addDays(MONDAY, 42));
+    for (const re of FORBIDDEN) expect(svg).not.toMatch(re);
+    expect(svg).toMatch(/YOU · Lv \d+ · Day 43/);
+    expect(thenVsNow(s)).toContainEqual(['Push-ups', '12', '20']);
+    expect(nextGoals(s, addDays(MONDAY, 42)).some((g) => g.startsWith('Title: '))).toBe(true);
+  });
+
+  it('pushes rewards first (combined), then the Sunday weekly report, once', async () => {
+    const clock = clockAt('2026-12-06T18:00:00Z'); // Sunday 19:00 in Zagreb
+    const host = fakeHost(clock);
+    host.call('plugin_fitness_setup', { age: 43, height_cm: 173, weight_kg: 75, timezone: 'Europe/Zagreb' });
+    const tick = host.schedules[0]!;
+    await tick(); // the Daily Quest push (Sunday is a recovery day)
+    host.call('plugin_fitness_complete'); // first quest: The Awakened
+    host.call('plugin_fitness_treasure', { action: 'add', name: 'Coffee', when: 'quests', value: 1 });
+    expect(await tick()).toEqual({ sent: 'reward' });
+    const reward = host.pushes.at(-1)!;
+    expect(reward.title).toBe('[SYSTEM] 2 new messages');
+    expect(reward.body).toMatch(/Title earned: The Awakened[\s\S]*Coffee/);
+    expect(reward.actions).toHaveLength(1);
+    expect(await tick()).toEqual({ sent: null });
+    // The report waits for 20:00 and for a hunter older than today.
+    clock.set('2026-12-06T19:05:00Z');
+    expect(await tick()).toEqual({ sent: null });
+    clock.set('2026-12-13T19:05:00Z');
+    expect(await tick()).toEqual({ sent: 'weekly' });
+    expect(host.pushes.at(-1)).toMatchObject({ title: '[SYSTEM] Weekly report' });
+    // No Gate cleared yet, so it opens on Monday.
+    expect(host.pushes.at(-1)!.body).toMatch(/Next week: Mon Gate, Wed Training A, Fri Training B\./);
+    expect(host.pushes.at(-1)!.body).toMatch(/Weekly weigh-in/);
+    expect(await tick()).not.toEqual({ sent: 'weekly' });
   });
 });

@@ -2,14 +2,18 @@
 // (and today's local date where it matters) and returns facts or a new state.
 
 import { AREAS, BY_ID, exercise, LADDERS, RECOVERY, REHAB, REHAB_MAX_PAIN, REHAB_NAME, TRACKED_LADDERS, WARMUP_A, WARMUP_B, type Area, type Exercise, type LadderId } from './exercises.js';
+import { featOf } from './feats.js';
 import {
   GATE_TESTS,
   RANKS,
+  type Counters,
+  type EventKind,
   type Feel,
   type GateTest,
   type HunterState,
   type Injury,
   type Profile,
+  type Push,
   type QuestType,
   type Rank,
   type Side,
@@ -17,7 +21,7 @@ import {
   type TrackedLadder,
 } from './types.js';
 
-export const XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20 } as const;
+export const XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20, title: 50, walk: 20 } as const;
 export const GATE_EVERY_DAYS = 42;
 export const DELOAD_EVERY_WEEKS = 5;
 const MAX_LOGS = 3000;
@@ -438,6 +442,9 @@ export function logSets(state: HunterState, date: string, exerciseId: string, ra
   s.top = hitTop ? s.top + 1 : 0;
   s.low = low ? s.low + 1 : 0;
 
+  const c = counters(state);
+  if (ex.kind === 'reps') c.reps += sets.reduce((a, b) => a + b, 0);
+
   const result: LogResult = { exercise: ex.id, sets, unlocked: [], recalibrated: [], hitTop };
   for (const ladder of TRACKED_LADDERS) {
     const levels = LADDERS[ladder].levels;
@@ -446,9 +453,11 @@ export function logSets(state: HunterState, date: string, exerciseId: string, ra
     if (s.top >= 2 && !deload && at < levels.length - 1) {
       const next = exercise(levels[at + 1]!);
       state.levels[ladder] = at + 1;
-      state.xp += XP.skill;
+      c.skills++;
       result.unlocked.push({ ladder, from: ex.id, to: next.id });
-      event(state, date, 'skill_unlocked', `Skill unlocked: ${next.name}. (+${XP.skill} XP)`);
+      const feat = featOf(next.id);
+      event(state, date, 'skill_unlocked', `Skill unlocked: ${next.name}. (+${XP.skill} XP)${feat ? ` Real world: ${feat}` : ''}`);
+      addXp(state, date, XP.skill);
     } else if (s.low >= 2 && at > 0) {
       const prev = exercise(levels[at - 1]!);
       state.levels[ladder] = at - 1;
@@ -485,22 +494,99 @@ export function completeQuest(state: HunterState, date: string): { already: bool
   const xp = quest.type === 'training' ? XP.training : XP.recovery;
   const record: HunterState['quests'][number] = { date, type: quest.type, xp };
   if (quest.session) record.session = quest.session;
-  state.quests.push(record);
-  if (state.quests.length > MAX_QUESTS) state.quests.splice(0, state.quests.length - MAX_QUESTS);
+  addQuestRecord(state, record);
   event(state, date, 'quest_complete', `${quest.type === 'training' ? `Daily Quest (Training ${quest.session})` : 'Recovery Quest'} complete. (+${xp} XP)`);
   addXp(state, date, xp);
   return { already: false, xp, type: quest.type };
 }
 
-export function streak(state: HunterState, today: string): number {
-  const dates = new Set(state.quests.map((q) => q.date));
-  let day = dates.has(today) ? today : addDays(today, -1);
-  let n = 0;
-  while (dates.has(day)) {
-    n++;
-    day = addDays(day, -1);
+/** Days away (3+ missed) before a quest counts as a comeback. */
+const COMEBACK_GAP = 4;
+
+/** Store a finished quest; coming back after days away is celebrated, not punished. */
+function addQuestRecord(state: HunterState, record: HunterState['quests'][number]): void {
+  const prev = state.quests.reduce<string | null>((m, q) => (q.date < record.date && (!m || q.date > m) ? q.date : m), null);
+  state.quests.push(record);
+  if (state.quests.length > MAX_QUESTS) state.quests.splice(0, state.quests.length - MAX_QUESTS);
+  if (prev && daysBetween(prev, record.date) >= COMEBACK_GAP) {
+    counters(state).comebacks++;
+    event(state, record.date, 'comeback', 'Welcome back, Hunter. Coming back is the hardest rep. The path continues.');
   }
-  return n;
+}
+
+export const SHIELD_EVERY = 7;
+export const MAX_SHIELDS = 2;
+
+export interface StreakInfo {
+  days: number;
+  /** Shields in hand: each one covers a missed day. */
+  shields: number;
+  /** Completed days until the next shield. */
+  toNextShield: number;
+  /** Missed days a shield covered. */
+  shielded: string[];
+}
+
+/**
+ * The streak, walked forward from the first day: every 7 days in a row earn a
+ * shield (max 2), and a missed day spends one instead of breaking the streak.
+ * Today does not break it while its quest is still open.
+ */
+export function streakInfo(state: HunterState, today: string): StreakInfo {
+  const done = new Set(state.quests.map((q) => q.date));
+  let days = 0;
+  let shields = 0;
+  let run = 0;
+  const shielded: string[] = [];
+  for (let d = state.startDate; d <= today; d = addDays(d, 1)) {
+    if (done.has(d)) {
+      days++;
+      run++;
+      if (run >= SHIELD_EVERY) {
+        run = 0;
+        shields = Math.min(MAX_SHIELDS, shields + 1);
+      }
+    } else if (d === today) {
+      break;
+    } else if (shields > 0) {
+      shields--;
+      shielded.push(d);
+    } else {
+      days = 0;
+      run = 0;
+    }
+  }
+  return { days, shields, toNextShield: SHIELD_EVERY - run, shielded };
+}
+
+export function streak(state: HunterState, today: string): number {
+  return streakInfo(state, today).days;
+}
+
+const NO_COUNTERS: Counters = { sideQuests: 0, lightDays: 0, comebacks: 0, skills: 0, reps: 0, walks: 0 };
+
+/** Lifetime tallies, created on first write (older states have none). */
+export function counters(state: HunterState): Counters {
+  state.counters = { ...NO_COUNTERS, ...state.counters };
+  return state.counters;
+}
+
+export const countersOf = (state: HunterState): Counters => ({ ...NO_COUNTERS, ...state.counters });
+
+/** Minimum minutes for the bonus walk. */
+export const WALK_MIN = 20;
+
+/** A bonus walk (any day, once a day): +20 XP. */
+export function logWalk(state: HunterState, date: string, minutes: number): { already: boolean; xp: number } {
+  if (minutes < WALK_MIN) throw new Error(`A bonus walk is about 30 minutes (at least ${WALK_MIN}).`);
+  const walks = (state.walks ??= []);
+  if (walks.includes(date)) return { already: true, xp: 0 };
+  walks.push(date);
+  if (walks.length > MAX_QUESTS) walks.splice(0, walks.length - MAX_QUESTS);
+  counters(state).walks++;
+  event(state, date, 'walk', `Bonus walk: ${Math.round(minutes)} minutes. (+${XP.walk} XP)`);
+  addXp(state, date, XP.walk);
+  return { already: false, xp: XP.walk };
 }
 
 // ---- gates & ranks -------------------------------------------------------------
@@ -563,7 +649,7 @@ export interface DayPlan {
   date: string;
   /** e.g. "Training A", "Recovery", "Gate". */
   label: string;
-  status: 'done' | 'today' | 'planned' | 'missed' | 'before';
+  status: 'done' | 'today' | 'planned' | 'missed' | 'shielded' | 'before';
 }
 
 const questLabel = (type: QuestType, session?: 'A' | 'B'): string => (type === 'training' ? `Training ${session ?? ''}`.trim() : type === 'gate' ? 'Gate' : 'Recovery');
@@ -574,12 +660,13 @@ export function weekPlan(state: HunterState, today: string): DayPlan[] {
   const trainingsBefore = state.quests.filter((q) => q.type === 'training' && q.date < today).length;
   let futureTrainings = 0;
   let gatePlanned = false;
+  const shielded = new Set(streakInfo(state, today).shielded);
   return Array.from({ length: 7 }, (_, i) => {
     const date = addDays(monday, i);
     const record = state.quests.find((q) => q.date === date);
     if (record) return { date, label: questLabel(record.type, record.session), status: date === today ? 'today' : 'done' };
     if (date < today) {
-      return { date, label: isTrainingDay(state, date) ? 'Training' : 'Recovery', status: date < state.startDate ? 'before' : 'missed' };
+      return { date, label: isTrainingDay(state, date) ? 'Training' : 'Recovery', status: date < state.startDate ? 'before' : shielded.has(date) ? 'shielded' : 'missed' };
     }
     if (date === today) {
       const q = questFor(state, date);
@@ -611,6 +698,8 @@ export interface LadderProgress {
   top: number;
   /** Why the ladder is held back today, if it is. */
   held?: string;
+  /** What the next step (or the top one) lets you do in real life. */
+  feat: string | null;
 }
 
 export function ladderProgress(state: HunterState): LadderProgress[] {
@@ -628,6 +717,7 @@ export function ladderProgress(state: HunterState): LadderProgress[] {
       next: next?.name ?? null,
       needs: next ? `${ex.sets} × ${ex.max}${ex.kind === 'hold' ? ' s' : ''}${ex.perSide ? ' per side' : ''} in 2 sessions` : null,
       top: Math.min(state.streaks[ex.id]?.top ?? 0, 2),
+      feat: featOf(next?.id ?? ex.id),
     };
     if (!hasEquipment(ex, state.profile)) p.held = ex.equipment === 'tower' ? 'needs the power tower' : 'needs a chair or bench';
     else {
@@ -671,7 +761,7 @@ export function clearGate(state: HunterState, date: string, results: Partial<Rec
   }
 
   if (!state.quests.some((q) => q.date === date)) {
-    state.quests.push({ date, type: 'gate', xp: XP.gate });
+    addQuestRecord(state, { date, type: 'gate', xp: XP.gate });
   }
   event(state, date, 'gate_cleared', `Gate ${number} cleared. (+${XP.gate} XP)`);
   addXp(state, date, XP.gate);
@@ -752,9 +842,27 @@ export function updateProfile(state: HunterState, today: string, patch: ProfileP
 
 // ---- events ----------------------------------------------------------------------------
 
+/** Events worth a push to the phone, with the push title. */
+const PUSH_TITLES: Partial<Record<EventKind, string>> = {
+  level_up: '[SYSTEM] Level up',
+  rank_up: '[SYSTEM] Rank up',
+  skill_unlocked: '[SYSTEM] Skill unlocked',
+  title: '[SYSTEM] Title earned',
+};
+const MAX_OUTBOX = 10;
+
 export function event(state: HunterState, date: string, kind: SystemEvent['kind'], text: string): void {
   state.events.push({ date, kind, text });
   if (state.events.length > MAX_EVENTS) state.events.splice(0, state.events.length - MAX_EVENTS);
+  const title = PUSH_TITLES[kind];
+  if (title) queuePush(state, { title, body: text });
+}
+
+/** Queue a push for the next minute tick. */
+export function queuePush(state: HunterState, push: Push): void {
+  const box = (state.outbox ??= []);
+  box.push(push);
+  if (box.length > MAX_OUTBOX) box.splice(0, box.length - MAX_OUTBOX);
 }
 
 // ---- parsing helpers (tool input) ---------------------------------------------------------

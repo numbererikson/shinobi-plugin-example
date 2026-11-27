@@ -23,12 +23,38 @@ a wall and a chair.
   unlocked skills and what tomorrow brings. *Skip this exercise* and *End
   quest* are always there. The same flow works from chat
   (`plugin_fitness_start` → `plugin_fitness_set` …).
-- **Your Path.** This week day by day (done / today / planned), every ladder
-  with exactly what unlocks its next step ("3 × 15 in 2 sessions — 1/2 done")
-  or why it is on hold, the next rank as a checklist with your best results,
-  and the next Gate.
-- **Skill Codex.** Every exercise with its animation, marked ✓ / "you are
-  here" on its ladder.
+- **Readiness and effort.** A quick check before the start ("How did you
+  sleep? Sore muscles?"): poor sleep or heavy soreness makes a light day (one
+  set fewer, bottom of the range — showing up still counts). The last set of
+  each exercise asks how it felt: *too easy* raises the next target by two
+  steps, *too hard* keeps it.
+- **Side quests for what hurts.** While an area hurts 1–6/10, gentle rehab
+  moves for it (e.g. *Repair the shoulder*: wall slide, prone Y raise,
+  side-lying external rotation, scapular push-up) are added after the main
+  work for +20 XP. The *Quest complete* screen asks how it feels now, and the
+  history charts the pain over time.
+- **The motivation layer.** Progress you can feel, not just numbers:
+  - **Journey map** E → S with a *you are here* marker between your rank and
+    the next, the three closest goals (next skill, title, treasure) and a
+    *then vs now* table (day 1 against today).
+  - **Real-world feats.** Every ladder step says what it lets you do outside
+    ("Pull-up: pull your own body up onto a wall, a ledge, out of a pool").
+  - **Titles** earned along the way, early wins first (*The Awakened*,
+    *Showed Up Anyway* for a light day, *The Return* for coming back after 3+
+    days away, *Iron Will* for 7 days in a row … *Apex*). Pick the one shown
+    under your name.
+  - **Treasure**: real rewards you set for yourself (running shoes at level
+    10, a massage at a 30-day streak, a trip at rank C). The System tells you
+    when you have earned one, with a *Claimed* button.
+  - **Streak shields**: every 7 days in a row earn one (max 2); a missed day
+    spends a shield instead of breaking the streak.
+  - **Bonus walk**: 30 minutes, any day, +20 XP.
+- **Your Path.** This week day by day (done / today / planned / shielded),
+  every ladder with exactly what unlocks its next step ("3 × 15 in 2 sessions
+  — 1/2 done") and its real-world feat, or why it is on hold, the next rank as
+  a checklist with your best results, and the next Gate.
+- **Skill Codex.** The current and the next exercise of every ladder with its
+  animation; warm-up, mobility and rehab moves show theirs inside the quest.
 - **Daily Quest.** Training days alternate session A (pull, push, legs, core)
   and B (pull, dip, hinge, L-sit, legs) of about 40 minutes with a short
   warm-up; other days are a 10-minute recovery quest (mobility). Every fifth
@@ -54,12 +80,15 @@ a wall and a chair.
   searching.
 - **Dashboard page** (*Apps → The System*, right after Music) in the
   `hologram` theme: today first (START / current step / rest / complete),
-  then the Status Window, Your Path, the Skill Codex, history charts (reps
-  per week, weight), Gate results, the System log, and the profile and pain
-  forms.
+  then the Status Window, Journey, Your Path, Treasure, Titles, the Skill
+  Codex, history charts (reps per week, pain, weight), Gate results, the
+  System log, and the profile and pain forms. A weekly weigh-in form appears
+  after the quest when the last weight is a week old.
 - **Pushes**: the Daily Quest at your chosen time, an optional 19:30 warning
-  if it is still open (recovery quests get a *Done* button), and a line in
-  Shinobi's morning brief.
+  if it is still open (recovery quests get a *Done* button), level-ups,
+  rank-ups, unlocked skills, titles and treasure (with *Claimed*), a Sunday
+  20:00 weekly report (trainings, reps, streak, next week, weigh-in
+  reminder), and a line in Shinobi's morning brief.
 
 Nutrition and habit tracking are deliberately out of scope.
 
@@ -87,8 +116,8 @@ Then open *The System* and fill in the registration form, or tell Claude
 | `plugin_fitness_setup` | Awaken a Hunter: age, height, weight, optional baseline (push-ups, pull-ups, squats…), training days, quest time, time zone, equipment, pain. `reset: true` starts over. |
 | `plugin_fitness_status` | Status Window: rank, level, XP, stats, streak, injuries, ladders, best results, next Gate, next-rank requirements. |
 | `plugin_fitness_today` | Today's quest with targets per set, rest, cues and adjustments (and the guided session in progress, if any). |
-| `plugin_fitness_start` | Start or resume today's quest as a guided session. |
-| `plugin_fitness_set` | Report the set just done (reps or seconds; a Gate trial's result). Moves to rest / next set / next exercise; the last one logs and completes the quest. |
+| `plugin_fitness_start` | Start or resume today's quest as a guided session; `sleep` (good/ok/poor) and `soreness` (none/some/heavy) can make it a light day. |
+| `plugin_fitness_set` | Report the set just done (reps or seconds; a Gate trial's result), with `feel` (easy/ok/hard) on an exercise's last set. Moves to rest / next set / next exercise; the last one logs and completes the quest. |
 | `plugin_fitness_skip` | Skip the current rest (`what: "rest"`) or exercise (`what: "exercise"`). |
 | `plugin_fitness_end` | End the guided quest now; what was done is logged. |
 | `plugin_fitness_log` | Log one exercise's sets (`sets: [6, 5, 5]`, or `set1`…`set5`). Unlocks/recalibrates. |
@@ -98,6 +127,9 @@ Then open *The System* and fill in the registration form, or tell Claude
 | `plugin_fitness_gate` | Log Gate trial results; updates bests, ladders and rank. |
 | `plugin_fitness_exercise` | How to do an exercise; without an id, the full catalogue by ladder. |
 | `plugin_fitness_history` | Quests, sets, body measurements, Gates and profile changes for the last N days. |
+| `plugin_fitness_treasure` | Real-world rewards: `add` (name, `when`: level/rank/streak/quests/title, `value`), `claim`, `remove` (id) or `list`. |
+| `plugin_fitness_title` | Earned titles and the ones ahead with progress; with `id`, the title shown under the Hunter name. |
+| `plugin_fitness_walk` | Log a ~30-minute bonus walk (at least 20): +20 XP, once a day. |
 
 The plugin returns facts in English (exercise ids, targets, cues, `[SYSTEM]`
 messages); the LLM explains them to the user in the user's own language.
@@ -106,13 +138,17 @@ messages); the LLM explains them to the user in the user's own language.
 
 | | |
 | --- | --- |
-| XP | training quest 100 · recovery 30 · Gate 300 · skill unlock 150 · rank up 500 |
+| XP | training quest 100 · recovery 30 · Gate 300 · skill unlock 150 · rank up 500 · side quest 20 · title 50 · bonus walk 20 |
+| Streak | consecutive days with a quest; 7 in a row earn a shield (max 2) that covers one missed day |
 | Level | level *n* needs 50 · *n* · (*n* − 1) XP |
 | Ranks | E → D → C → B → A → S, decided only at Gates and never lost. Requirements combine test results (e.g. C: 8 pull-ups, 25 push-ups, 8 dips, 45 s hang, 40 s hollow hold) and ladder levels (e.g. C: Bulgarian split squat). Without a tower the pull/dip trials are waived up to rank C. |
 | Stats | STR from pull/push/dip levels and bests · AGI from core and L-sit · VIT from legs and hinge · END from hang time and consistency |
 
-All rules are pure functions in [`src/rules.ts`](src/rules.ts); the catalogue,
-ladders and figure poses are in [`src/exercises.ts`](src/exercises.ts).
+All rules are pure functions in [`src/rules.ts`](src/rules.ts) and, for the
+motivation layer (titles, treasure, journey map, weekly report),
+[`src/journey.ts`](src/journey.ts); the catalogue, ladders and figure poses
+are in [`src/exercises.ts`](src/exercises.ts), the real-world feats in
+[`src/feats.ts`](src/feats.ts).
 
 ## Development
 

@@ -21,7 +21,7 @@
     {
       "id": "fitness",
       "name": "The System (Fitness)",
-      "description": "Bodyweight strength as a hunter RPG: Daily Quests, ranks E→S at Gates, skill ladders, animated exercise demos, pain-aware swaps. Power tower optional. Needs Shinobi 0.13+ for the full page.",
+      "description": "Bodyweight strength as a hunter RPG: Daily Quests, ranks E→S at Gates, skill ladders, animated exercise demos, pain-aware swaps and rehab side quests, titles, real-world Treasure rewards and streak shields. Power tower optional. Needs Shinobi 0.13+ for the full page.",
       "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs"
     },
     {

@@ -1224,13 +1224,57 @@ var REHAB_NAME = {
   ankle: "Repair the ankle"
 };
 
+// src/feats.ts
+var FEATS = {
+  // pull
+  dead_hang: "Hang from a ledge or a branch with a grip that holds.",
+  scapular_pullup: "Shoulders strong and stable enough to hang safely.",
+  negative_pullup: "Lower yourself down a wall or a tree under control.",
+  pullup: "Pull your own body up: onto a wall, a ledge, out of a pool.",
+  chest_to_bar: "Pull high enough to get your chest over an obstacle.",
+  archer_pullup: "One arm does most of the pulling. Few gym-goers ever get here.",
+  prone_y_raise: "Upper back that keeps your shoulders healthy and your posture tall.",
+  // dip / L-sit
+  support_hold: "Hold your weight on straight arms: the start of climbing over a fence.",
+  negative_dip: "Lower yourself from a high wall without dropping.",
+  dip: "Push yourself up out of a pool or onto a high wall.",
+  tuck_l_sit: "Lift your whole body off the ground on your hands.",
+  l_sit: "Hold your body and legs off the floor on your hands. Pure control.",
+  // push
+  wall_pushup: "Pressing that is kind to the joints, and the first step back.",
+  incline_pushup: "Push yourself up off a table or a counter with ease.",
+  pushup: "Push yourself up off the ground from flat, any time.",
+  deep_pushup: "Full-range pressing strength for shoulders that last.",
+  decline_pushup: "Pressing power for lifting things overhead.",
+  pseudo_planche_pushup: "Strength on the way to holding your body off the floor.",
+  // legs
+  wall_sit: "Legs that hold you through a long day on your feet.",
+  squat: "Get down to the floor and back up without a second thought.",
+  split_squat: "Take steep stairs two at a time.",
+  bulgarian_split_squat: "Strong single legs for hiking, skiing and running.",
+  assisted_pistol: "Stand up from a low seat on one leg.",
+  pistol_squat: "Full squat on one leg. Strength and balance few people have.",
+  // hinge
+  glute_bridge: "A back that holds when you lift a box.",
+  single_leg_glute_bridge: "Hips strong enough to protect your knees and back.",
+  single_leg_rdl: "Pick something up from the floor balanced on one leg.",
+  // core
+  dead_bug: "A trunk that protects your lower back.",
+  hollow_hold: "Brace your body like a plank of steel: the base of every skill.",
+  knee_raise: "Core control for getting up and moving freely.",
+  leg_raise: "Lift your legs with a flat back: real lower-belly strength.",
+  hanging_knee_raise: "Lift your legs while hanging: climbing over obstacles.",
+  hanging_leg_raise: "Full-body control hanging from a bar."
+};
+var featOf = (id) => FEATS[id] ?? null;
+
 // src/types.ts
 var RANKS = ["E", "D", "C", "B", "A", "S"];
 var GATE_TESTS = ["pullups", "pushups", "dips", "dead_hang", "hollow_hold", "l_sit"];
 var STATE_KEY = "hunter";
 
 // src/rules.ts
-var XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20 };
+var XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20, title: 50, walk: 20 };
 var GATE_EVERY_DAYS = 42;
 var DELOAD_EVERY_WEEKS = 5;
 var MAX_LOGS = 3e3;
@@ -1529,6 +1573,8 @@ function logSets(state, date, exerciseId, rawSets, feel) {
   const s = state.streaks[ex.id] ??= { top: 0, low: 0 };
   s.top = hitTop ? s.top + 1 : 0;
   s.low = low ? s.low + 1 : 0;
+  const c = counters(state);
+  if (ex.kind === "reps") c.reps += sets.reduce((a, b) => a + b, 0);
   const result = { exercise: ex.id, sets, unlocked: [], recalibrated: [], hitTop };
   for (const ladder of TRACKED_LADDERS) {
     const levels = LADDERS[ladder].levels;
@@ -1537,9 +1583,11 @@ function logSets(state, date, exerciseId, rawSets, feel) {
     if (s.top >= 2 && !deload && at2 < levels.length - 1) {
       const next = exercise(levels[at2 + 1]);
       state.levels[ladder] = at2 + 1;
-      state.xp += XP.skill;
+      c.skills++;
       result.unlocked.push({ ladder, from: ex.id, to: next.id });
-      event(state, date, "skill_unlocked", `Skill unlocked: ${next.name}. (+${XP.skill} XP)`);
+      const feat = featOf(next.id);
+      event(state, date, "skill_unlocked", `Skill unlocked: ${next.name}. (+${XP.skill} XP)${feat ? ` Real world: ${feat}` : ""}`);
+      addXp(state, date, XP.skill);
     } else if (s.low >= 2 && at2 > 0) {
       const prev = exercise(levels[at2 - 1]);
       state.levels[ladder] = at2 - 1;
@@ -1570,21 +1618,69 @@ function completeQuest(state, date) {
   const xp = quest.type === "training" ? XP.training : XP.recovery;
   const record = { date, type: quest.type, xp };
   if (quest.session) record.session = quest.session;
-  state.quests.push(record);
-  if (state.quests.length > MAX_QUESTS) state.quests.splice(0, state.quests.length - MAX_QUESTS);
+  addQuestRecord(state, record);
   event(state, date, "quest_complete", `${quest.type === "training" ? `Daily Quest (Training ${quest.session})` : "Recovery Quest"} complete. (+${xp} XP)`);
   addXp(state, date, xp);
   return { already: false, xp, type: quest.type };
 }
-function streak(state, today) {
-  const dates = new Set(state.quests.map((q) => q.date));
-  let day = dates.has(today) ? today : addDays(today, -1);
-  let n = 0;
-  while (dates.has(day)) {
-    n++;
-    day = addDays(day, -1);
+var COMEBACK_GAP = 4;
+function addQuestRecord(state, record) {
+  const prev = state.quests.reduce((m, q) => q.date < record.date && (!m || q.date > m) ? q.date : m, null);
+  state.quests.push(record);
+  if (state.quests.length > MAX_QUESTS) state.quests.splice(0, state.quests.length - MAX_QUESTS);
+  if (prev && daysBetween(prev, record.date) >= COMEBACK_GAP) {
+    counters(state).comebacks++;
+    event(state, record.date, "comeback", "Welcome back, Hunter. Coming back is the hardest rep. The path continues.");
   }
-  return n;
+}
+var SHIELD_EVERY = 7;
+var MAX_SHIELDS = 2;
+function streakInfo(state, today) {
+  const done = new Set(state.quests.map((q) => q.date));
+  let days = 0;
+  let shields = 0;
+  let run = 0;
+  const shielded = [];
+  for (let d = state.startDate; d <= today; d = addDays(d, 1)) {
+    if (done.has(d)) {
+      days++;
+      run++;
+      if (run >= SHIELD_EVERY) {
+        run = 0;
+        shields = Math.min(MAX_SHIELDS, shields + 1);
+      }
+    } else if (d === today) {
+      break;
+    } else if (shields > 0) {
+      shields--;
+      shielded.push(d);
+    } else {
+      days = 0;
+      run = 0;
+    }
+  }
+  return { days, shields, toNextShield: SHIELD_EVERY - run, shielded };
+}
+function streak(state, today) {
+  return streakInfo(state, today).days;
+}
+var NO_COUNTERS = { sideQuests: 0, lightDays: 0, comebacks: 0, skills: 0, reps: 0, walks: 0 };
+function counters(state) {
+  state.counters = { ...NO_COUNTERS, ...state.counters };
+  return state.counters;
+}
+var countersOf = (state) => ({ ...NO_COUNTERS, ...state.counters });
+var WALK_MIN = 20;
+function logWalk(state, date, minutes) {
+  if (minutes < WALK_MIN) throw new Error(`A bonus walk is about 30 minutes (at least ${WALK_MIN}).`);
+  const walks = state.walks ??= [];
+  if (walks.includes(date)) return { already: true, xp: 0 };
+  walks.push(date);
+  if (walks.length > MAX_QUESTS) walks.splice(0, walks.length - MAX_QUESTS);
+  counters(state).walks++;
+  event(state, date, "walk", `Bonus walk: ${Math.round(minutes)} minutes. (+${XP.walk} XP)`);
+  addXp(state, date, XP.walk);
+  return { already: false, xp: XP.walk };
 }
 var RANK_REQS = {
   D: [{ test: "pushups", min: 15 }, { test: "hollow_hold", min: 20 }, { ladder: "legs", level: "split_squat" }, { test: "pullups", min: 3, tower: true }, { test: "dead_hang", min: 30, tower: true }],
@@ -1628,12 +1724,13 @@ function weekPlan(state, today) {
   const trainingsBefore = state.quests.filter((q) => q.type === "training" && q.date < today).length;
   let futureTrainings = 0;
   let gatePlanned = false;
+  const shielded = new Set(streakInfo(state, today).shielded);
   return Array.from({ length: 7 }, (_, i) => {
     const date = addDays(monday, i);
     const record = state.quests.find((q) => q.date === date);
     if (record) return { date, label: questLabel(record.type, record.session), status: date === today ? "today" : "done" };
     if (date < today) {
-      return { date, label: isTrainingDay(state, date) ? "Training" : "Recovery", status: date < state.startDate ? "before" : "missed" };
+      return { date, label: isTrainingDay(state, date) ? "Training" : "Recovery", status: date < state.startDate ? "before" : shielded.has(date) ? "shielded" : "missed" };
     }
     if (date === today) {
       const q = questFor(state, date);
@@ -1665,7 +1762,8 @@ function ladderProgress(state) {
       current: ex.name,
       next: next?.name ?? null,
       needs: next ? `${ex.sets} \xD7 ${ex.max}${ex.kind === "hold" ? " s" : ""}${ex.perSide ? " per side" : ""} in 2 sessions` : null,
-      top: Math.min(state.streaks[ex.id]?.top ?? 0, 2)
+      top: Math.min(state.streaks[ex.id]?.top ?? 0, 2),
+      feat: featOf(next?.id ?? ex.id)
     };
     if (!hasEquipment(ex, state.profile)) p.held = ex.equipment === "tower" ? "needs the power tower" : "needs a chair or bench";
     else {
@@ -1704,7 +1802,7 @@ function clearGate(state, date, results) {
     if (state.levels[l] !== before[l]) placed[l] = { from: LADDERS[l].levels[before[l]], to: LADDERS[l].levels[state.levels[l]] };
   }
   if (!state.quests.some((q) => q.date === date)) {
-    state.quests.push({ date, type: "gate", xp: XP.gate });
+    addQuestRecord(state, { date, type: "gate", xp: XP.gate });
   }
   event(state, date, "gate_cleared", `Gate ${number} cleared. (+${XP.gate} XP)`);
   addXp(state, date, XP.gate);
@@ -1764,9 +1862,23 @@ function updateProfile(state, today, patch) {
   if (state.profileHistory.length > MAX_HISTORY) state.profileHistory.splice(0, state.profileHistory.length - MAX_HISTORY);
   return changed;
 }
+var PUSH_TITLES = {
+  level_up: "[SYSTEM] Level up",
+  rank_up: "[SYSTEM] Rank up",
+  skill_unlocked: "[SYSTEM] Skill unlocked",
+  title: "[SYSTEM] Title earned"
+};
+var MAX_OUTBOX = 10;
 function event(state, date, kind, text) {
   state.events.push({ date, kind, text });
   if (state.events.length > MAX_EVENTS) state.events.splice(0, state.events.length - MAX_EVENTS);
+  const title = PUSH_TITLES[kind];
+  if (title) queuePush(state, { title, body: text });
+}
+function queuePush(state, push) {
+  const box = state.outbox ??= [];
+  box.push(push);
+  if (box.length > MAX_OUTBOX) box.splice(0, box.length - MAX_OUTBOX);
 }
 var DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 function parseDays(v) {
@@ -1791,6 +1903,301 @@ function parseTime(v) {
   const m = /^(\d{1,2})[:.](\d{2})$/.exec(String(v).trim());
   if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error(`time '${String(v)}' must look like 10:30`);
   return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
+
+// src/journey.ts
+var rankAt = (r) => RANKS.indexOf(r);
+var PULLUPS = new Set(LADDERS.pull.levels.slice(LADDERS.pull.levels.indexOf("pullup")));
+var TITLES = [
+  { id: "awakened", name: "The Awakened", desc: "Complete your first quest.", progress: (x) => [x.s.quests.length, 1] },
+  { id: "gatebreaker", name: "Gatebreaker", desc: "Clear your first Gate.", progress: (x) => [x.s.gates.length, 1] },
+  { id: "showed_up", name: "Showed Up Anyway", desc: "Finish a light day after poor sleep or heavy soreness.", progress: (x) => [x.c.lightDays, 1] },
+  { id: "the_return", name: "The Return", desc: "Come back after 3+ days away.", progress: (x) => [x.c.comebacks, 1] },
+  { id: "iron_will", name: "Iron Will", desc: "Keep a 7-day streak.", progress: (x) => [x.streak, 7] },
+  {
+    id: "bar_breaker",
+    name: "Bar Breaker",
+    desc: "Your first strict pull-up.",
+    progress: (x) => [(x.s.best.pullups ?? 0) >= 1 || x.s.logs.some((l) => PULLUPS.has(l.exercise) && l.sets.some((n) => n >= 1)) ? 1 : 0, 1]
+  },
+  { id: "mender", name: "Mender", desc: "Complete 10 rehab side quests.", progress: (x) => [x.c.sideQuests, 10] },
+  { id: "wanderer", name: "Wanderer", desc: "Take 20 bonus walks.", progress: (x) => [x.c.walks, 20] },
+  { id: "disciplined", name: "Disciplined", desc: "Complete 25 quests.", progress: (x) => [x.s.quests.length, 25] },
+  { id: "skill_hunter", name: "Skill Hunter", desc: "Unlock 5 skills.", progress: (x) => [x.c.skills, 5] },
+  { id: "thousand", name: "Thousand Reps", desc: "Log 1,000 reps.", progress: (x) => [x.c.reps, 1e3] },
+  { id: "rising", name: "Rising", desc: "Reach rank D.", progress: (x) => [rankAt(x.s.rank), rankAt("D")] },
+  { id: "unbroken", name: "Unbroken", desc: "Keep a 30-day streak.", progress: (x) => [x.streak, 30] },
+  { id: "veteran", name: "Veteran", desc: "Complete 100 quests.", progress: (x) => [x.s.quests.length, 100] },
+  { id: "ten_thousand", name: "Ten Thousand", desc: "Log 10,000 reps.", progress: (x) => [x.c.reps, 1e4] },
+  { id: "elite", name: "Elite", desc: "Reach rank B.", progress: (x) => [rankAt(x.s.rank), rankAt("B")] },
+  { id: "relentless", name: "Relentless", desc: "Keep a 100-day streak.", progress: (x) => [x.streak, 100] },
+  { id: "apex", name: "Apex", desc: "Reach rank S.", progress: (x) => [rankAt(x.s.rank), rankAt("S")] }
+];
+var TITLE_BY_ID = new Map(TITLES.map((t) => [t.id, t]));
+var titleName = (id) => id ? TITLE_BY_ID.get(id)?.name ?? null : null;
+var ctxOf = (s, today) => ({ s, streak: streakInfo(s, today).days, c: countersOf(s) });
+function titleStatus(state, today) {
+  const x = ctxOf(state, today);
+  const earned = new Map((state.titles ?? []).map((t) => [t.id, t.date]));
+  return TITLES.map((t) => {
+    const [now, of] = t.progress(x);
+    return { id: t.id, name: t.name, desc: t.desc, earned: earned.get(t.id) ?? null, now: Math.min(Math.max(0, now), of), of };
+  });
+}
+function chooseTitle(state, id) {
+  const t = TITLES.find((d) => d.id === id || d.name.toLowerCase() === id.trim().toLowerCase());
+  if (!t) throw new Error(`unknown title '${id}'`);
+  if (!(state.titles ?? []).some((e) => e.id === t.id)) throw new Error(`'${t.name}' is not earned yet.`);
+  state.activeTitle = t.id;
+  state.titleChosen = true;
+  return t.name;
+}
+var MAX_OPEN_TREASURES = 12;
+var MAX_TREASURES = 40;
+var TREASURE_WHEN = ["level", "rank", "streak", "quests", "title"];
+function parseTarget(when, raw) {
+  const s = String(raw ?? "").trim();
+  const int = (min, max, what) => {
+    const n = Number(s);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${what} must be a whole number between ${min} and ${max}`);
+    return n;
+  };
+  switch (when) {
+    case "level":
+      return int(2, 200, "level");
+    case "streak":
+      return int(3, 1e3, "streak days");
+    case "quests":
+      return int(1, 2e3, "quest count");
+    case "rank": {
+      const r = s.toUpperCase().replace(/^RANK\s*/, "");
+      if (!RANKS.includes(r) || r === "E") throw new Error("rank must be D, C, B, A or S");
+      return r;
+    }
+    case "title": {
+      const t = TITLES.find((d) => d.id === s || d.name.toLowerCase() === s.toLowerCase());
+      if (!t) throw new Error(`title must be one of: ${TITLES.map((d) => d.name).join(", ")}`);
+      return t.id;
+    }
+  }
+}
+function treasureGoal(t) {
+  switch (t.when) {
+    case "level":
+      return `Level ${t.target}`;
+    case "rank":
+      return `Rank ${t.target}`;
+    case "streak":
+      return `${t.target}-day streak`;
+    case "quests":
+      return `${t.target} quests`;
+    case "title":
+      return `Title: ${titleName(String(t.target)) ?? t.target}`;
+  }
+}
+function treasureProgressCtx(t, x) {
+  switch (t.when) {
+    case "level":
+      return [hunterLevel(x.s.xp), Number(t.target)];
+    case "rank":
+      return [rankAt(x.s.rank), rankAt(t.target)];
+    case "streak":
+      return [x.streak, Number(t.target)];
+    case "quests":
+      return [x.s.quests.length, Number(t.target)];
+    case "title":
+      return [(x.s.titles ?? []).some((e) => e.id === t.target) ? 1 : 0, 1];
+  }
+}
+function treasureProgress(state, t, today) {
+  let [now, of] = treasureProgressCtx(t, ctxOf(state, today));
+  if (t.when === "rank" && now < of) {
+    const check = rankChecklist(state);
+    if (check?.items.length) now += Math.min(0.95, check.items.filter((i) => i.met).length / check.items.length);
+    now = Math.round(now * 100) / 100;
+  }
+  return { now: Math.min(Math.max(0, now), of), of };
+}
+function treasureProgressText(state, t, p) {
+  if (t.when === "rank") return `now rank ${state.rank}`;
+  if (t.when === "title") return p.now >= p.of ? "earned" : "not earned yet";
+  return `${p.now} / ${p.of}`;
+}
+function addTreasure(state, today, name, when, raw) {
+  const clean = name.trim().slice(0, 60);
+  if (!clean) throw new Error('give the treasure a name, e.g. "New running shoes"');
+  if (!TREASURE_WHEN.includes(when)) throw new Error(`when must be one of: ${TREASURE_WHEN.join(", ")}`);
+  const list = state.treasures ??= [];
+  if (list.filter((t2) => !t2.claimedAt).length >= MAX_OPEN_TREASURES) throw new Error(`At most ${MAX_OPEN_TREASURES} open treasures. Claim or remove one first.`);
+  const id = state.nextTreasureId ?? 1;
+  state.nextTreasureId = id + 1;
+  const t = { id, name: clean, when, target: parseTarget(when, raw), createdAt: today };
+  list.push(t);
+  if (list.length > MAX_TREASURES) {
+    const old = list.findIndex((x) => x.claimedAt);
+    if (old >= 0) list.splice(old, 1);
+  }
+  return t;
+}
+function findTreasure(state, id) {
+  const t = (state.treasures ?? []).find((x) => x.id === id);
+  if (!t) throw new Error(`no treasure #${id}`);
+  return t;
+}
+function claimTreasure(state, today, id) {
+  const t = findTreasure(state, id);
+  if (!t.unlockedAt) throw new Error(`'${t.name}' is still locked: ${treasureGoal(t)} first.`);
+  if (!t.claimedAt) {
+    t.claimedAt = today;
+    event(state, today, "treasure", `Treasure claimed: ${t.name}. Enjoy it, you earned it.`);
+  }
+  return t;
+}
+function removeTreasure(state, id) {
+  const t = findTreasure(state, id);
+  state.treasures = (state.treasures ?? []).filter((x) => x.id !== id);
+  return t;
+}
+function checkRewards(state, today) {
+  const out = { titles: [], treasures: [] };
+  let x = ctxOf(state, today);
+  const have = new Set((state.titles ?? []).map((t) => t.id));
+  for (const t of TITLES) {
+    if (have.has(t.id)) continue;
+    const [now, of] = t.progress(x);
+    if (now < of) continue;
+    (state.titles ??= []).push({ id: t.id, date: today });
+    have.add(t.id);
+    out.titles.push(t.name);
+    event(state, today, "title", `Title earned: ${t.name}. ${t.desc} (+${XP.title} XP)`);
+    addXp(state, today, XP.title);
+    if (!state.titleChosen) state.activeTitle = t.id;
+  }
+  if (out.titles.length) x = ctxOf(state, today);
+  for (const t of state.treasures ?? []) {
+    if (t.unlockedAt) continue;
+    const [now, of] = treasureProgressCtx(t, x);
+    if (now < of) continue;
+    t.unlockedAt = today;
+    out.treasures.push(t);
+    event(state, today, "treasure", `Treasure unlocked: ${t.name} (${treasureGoal(t)}). Go get it in the real world.`);
+    queuePush(state, {
+      title: "[SYSTEM] Treasure unlocked",
+      body: `${t.name}: you reached ${treasureGoal(t)}. You earned it. Go get it.`,
+      actions: [{ label: "Claimed", tool: "plugin_fitness_treasure", args: { action: "claim", id: t.id } }]
+    });
+  }
+  return out;
+}
+function nextGoals(state, today) {
+  const goals = [];
+  const skill = ladderProgress(state).filter((p) => p.next && !p.held).sort((a, b) => b.top - a.top || a.level / a.of - b.level / b.of)[0];
+  if (skill) goals.push(`Skill: ${skill.next} (${skill.top}/2 sessions at the top of ${skill.current})`);
+  const title = titleStatus(state, today).filter((t) => !t.earned).sort((a, b) => b.now / b.of - a.now / a.of)[0];
+  if (title) goals.push(`Title: ${title.name}. ${title.desc} (${title.now}/${title.of})`);
+  const open = (state.treasures ?? []).filter((t) => !t.unlockedAt);
+  const treasure = open.map((t) => ({ t, p: treasureProgress(state, t, today) })).sort((a, b) => b.p.now / b.p.of - a.p.now / a.p.of)[0];
+  if (treasure) goals.push(`Treasure: ${treasure.t.name} at ${treasureGoal(treasure.t)} (${treasureProgressText(state, treasure.t, treasure.p)})`);
+  return goals;
+}
+var RANK_WORD = { E: "Novice", D: "Solid base", C: "Strong", B: "Advanced", A: "Elite", S: "Apex" };
+var C = { line: "#1e3a5f", glow: "#4fd8ff", dark: "#0d1a33", dim: "#5a7aa6", gold: "#ffcf5c", text: "#cfe9ff" };
+function journeyMapSvg(state, today) {
+  const W = 360;
+  const H = 150;
+  const y = 86;
+  const step2 = 60;
+  const x = (i) => 30 + i * step2;
+  const at2 = rankAt(state.rank);
+  const check = rankChecklist(state);
+  const frac = check && check.items.length ? check.items.filter((i) => i.met).length / check.items.length : 0;
+  const pos = at2 >= RANKS.length - 1 ? x(at2) : x(at2) + frac * step2;
+  const mx = pos;
+  const anchor = mx < 70 ? "start" : mx > W - 70 ? "end" : "middle";
+  const lx = anchor === "start" ? Math.max(4, mx - 14) : anchor === "end" ? Math.min(W - 4, mx + 14) : mx;
+  const level = hunterLevel(state.xp);
+  const day = daysBetween(state.startDate, today) + 1;
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="sans-serif">`,
+    `<defs><linearGradient id="jg" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#2b7fff"/><stop offset="1" stop-color="${C.glow}"/></linearGradient></defs>`,
+    `<line x1="${x(0)}" y1="${y}" x2="${x(5)}" y2="${y}" stroke="${C.line}" stroke-width="4" stroke-linecap="round"/>`,
+    `<line x1="${x(0)}" y1="${y}" x2="${pos.toFixed(1)}" y2="${y}" stroke="${C.glow}" stroke-opacity="0.25" stroke-width="12" stroke-linecap="round"/>`,
+    `<line x1="${x(0)}" y1="${y}" x2="${pos.toFixed(1)}" y2="${y}" stroke="url(#jg)" stroke-width="4" stroke-linecap="round"/>`
+  ];
+  RANKS.forEach((r, i) => {
+    const cx = x(i);
+    if (i === at2) {
+      parts.push(
+        `<circle cx="${cx}" cy="${y}" r="18" fill="none" stroke="${C.glow}" stroke-width="2"><animate attributeName="r" values="18;26;18" dur="2.4s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.8;0;0.8" dur="2.4s" repeatCount="indefinite"/></circle>`,
+        `<circle cx="${cx}" cy="${y}" r="17" fill="${C.dark}" stroke="${C.glow}" stroke-width="3"/>`,
+        `<text x="${cx}" y="${y + 6}" text-anchor="middle" font-size="17" font-weight="700" fill="${C.glow}">${r}</text>`
+      );
+    } else if (i < at2) {
+      parts.push(
+        `<circle cx="${cx}" cy="${y}" r="15" fill="${C.glow}"/>`,
+        `<text x="${cx}" y="${y + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.dark}">${r}</text>`
+      );
+    } else {
+      parts.push(
+        `<circle cx="${cx}" cy="${y}" r="15" fill="${C.dark}" stroke="${C.dim}" stroke-width="2"/>`,
+        `<text x="${cx}" y="${y + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.dim}">${r}</text>`
+      );
+    }
+    parts.push(`<text x="${cx}" y="${y + 40}" text-anchor="middle" font-size="11" fill="${i <= at2 ? C.text : C.dim}">${RANK_WORD[r]}</text>`);
+  });
+  parts.push(
+    `<path d="M${(mx - 7).toFixed(1)} ${y - 32} L${(mx + 7).toFixed(1)} ${y - 32} L${mx.toFixed(1)} ${y - 22} Z" fill="${C.gold}"/>`,
+    `<text x="${lx.toFixed(1)}" y="${y - 40}" text-anchor="${anchor}" font-size="13" font-weight="700" fill="${C.gold}">YOU \xB7 Lv ${level} \xB7 Day ${day}</text>`
+  );
+  parts.push("</svg>");
+  return parts.join("");
+}
+var SHORT = {
+  pullups: "Pull-ups",
+  pushups: "Push-ups",
+  dips: "Dips",
+  dead_hang: "Dead hang (s)",
+  hollow_hold: "Hollow hold (s)",
+  l_sit: "L-sit (s)"
+};
+function thenVsNow(state) {
+  const rows = [
+    ["Level", "1", String(hunterLevel(state.xp))],
+    ["Rank", "E", state.rank]
+  ];
+  const first = state.gates[0]?.results ?? {};
+  for (const t of Object.keys(TEST_LABEL)) {
+    const then = first[t];
+    const now = state.best[t];
+    if (then !== void 0 && now !== void 0) rows.push([SHORT[t], String(then), String(now)]);
+  }
+  const weights = state.body.filter((b) => b.weightKg !== void 0);
+  if (weights.length >= 2) rows.push(["Weight (kg)", String(weights[0].weightKg), String(weights.at(-1).weightKg)]);
+  const c = countersOf(state);
+  rows.push(["Skills unlocked", "0", String(c.skills)], ["Quests done", "0", String(state.quests.length)]);
+  return rows;
+}
+var DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function weeklyReport(state, today) {
+  const monday = addDays(today, -((weekday(today) + 6) % 7));
+  const inWeek = (xs) => xs.filter((x) => x.date >= monday && x.date <= today);
+  const quests = inWeek(state.quests);
+  const trainings = quests.filter((q) => q.type !== "recovery").length;
+  const planned = weekPlan(state, today).filter((d) => d.status !== "before" && /Training|Gate/.test(d.label)).length;
+  const recovery = quests.filter((q) => q.type === "recovery").length;
+  const reps = inWeek(state.logs).filter((l) => BY_ID.get(l.exercise)?.kind === "reps").reduce((n, l) => n + l.sets.reduce((a, b) => a + b, 0), 0);
+  const unlocked = inWeek(state.events).filter((e) => e.kind === "skill_unlocked").map((e) => e.text.replace(/^Skill unlocked: ([^.]+)\..*$/, "$1"));
+  const st = streakInfo(state, today);
+  const next = weekPlan(state, addDays(today, 1)).filter((d) => /Training|Gate/.test(d.label)).map((d) => `${DAY[weekday(d.date)]} ${d.label}`).join(", ");
+  const lastWeight = [...state.body].reverse().find((b) => b.weightKg !== void 0);
+  const weighIn = !lastWeight || daysBetween(lastWeight.date, today) >= 7;
+  const lines = [
+    `Trainings ${trainings}/${Math.max(planned, trainings)} \xB7 recovery ${recovery} \xB7 ${reps} reps \xB7 streak ${st.days}${st.shields ? ` (shield ${st.shields})` : ""}.`,
+    unlocked.length ? `Unlocked: ${unlocked.join(", ")}.` : "",
+    next ? `Next week: ${next}.` : "",
+    weighIn ? "Weekly weigh-in: step on the scale and log it in the profile." : ""
+  ].filter(Boolean);
+  return { title: "[SYSTEM] Weekly report", body: lines.join(" ") };
 }
 
 // src/session.ts
@@ -1939,7 +2346,9 @@ function finish(state, a, date, now) {
     const didSomething = a.type === "recovery" ? a.steps.some((s) => s.kind === "recovery" && s.done.length > 0) || rehabDone : work.length > 0;
     if (didSomething) {
       completeQuest(state, date);
+      if (a.light) counters(state).lightDays++;
       if (rehabDone && a.sideQuest) {
+        counters(state).sideQuests++;
         event(state, date, "quest_complete", `Side quest complete: ${a.sideQuest}. (+${XP.sideQuest} XP)`);
         addXp(state, date, XP.sideQuest);
         summary.sideQuest = a.sideQuest;
@@ -1947,6 +2356,11 @@ function finish(state, a, date, now) {
     } else {
       summary.outcome = "abandoned";
     }
+  }
+  if (summary.outcome !== "abandoned") {
+    const r = checkRewards(state, date);
+    if (r.titles.length) summary.titles = r.titles;
+    if (r.treasures.length) summary.treasures = r.treasures.map((t) => ({ id: t.id, name: t.name }));
   }
   summary.xp = state.xp - xpBefore;
   summary.levelAfter = hunterLevel(state.xp);
@@ -1983,8 +2397,8 @@ function figureSvg(id) {
   return svg;
 }
 var unitOf = (ex) => ex.kind === "hold" ? "s" : "reps";
-var DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-var dayName = (date) => DAY[(/* @__PURE__ */ new Date(`${date}T12:00:00Z`)).getUTCDay()];
+var DAY2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+var dayName = (date) => DAY2[(/* @__PURE__ */ new Date(`${date}T12:00:00Z`)).getUTCDay()];
 var mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 var questTitle = (type, session) => type === "gate" ? "Gate" : type === "training" ? `Training ${session ?? ""}`.trim() : "Recovery";
 function figure(ex, opts) {
@@ -2017,7 +2431,10 @@ function renderPage(state, today, now, defaultTimezone) {
   }
   if (running2) return refreshSeconds ? { blocks, refreshSeconds } : { blocks };
   blocks.push({ type: "divider" }, ...statusBlocks(state, today));
+  blocks.push({ type: "divider" }, ...journeyBlocks(state, today));
   blocks.push({ type: "divider" }, ...pathBlocks(state, today));
+  blocks.push({ type: "divider" }, ...treasureBlocks(state, today));
+  blocks.push({ type: "divider" }, ...titleBlocks(state, today));
   blocks.push({ type: "divider" }, ...codexBlocks(state));
   blocks.push({ type: "divider" }, ...historyBlocks(state, today));
   blocks.push({ type: "divider" }, { type: "heading", text: "Profile" }, profileForm(state), painForm());
@@ -2031,7 +2448,8 @@ function startBlocks(state, today) {
     return [
       { type: "heading", text: title },
       { type: "text", tone: "ok", text: `${T.questDone}
-Tomorrow: ${next?.label ?? "Recovery"}.` }
+Tomorrow: ${next?.label ?? "Recovery"}.` },
+      ...bonusBlocks(state, today)
     ];
   }
   const items = q.type === "gate" ? q.gateTests.map((t) => ({ title: TEST_LABEL[t], subtitle: "one all-out set", badge: "trial" })) : q.main.map((m) => ({
@@ -2071,6 +2489,9 @@ Tomorrow: ${next?.label ?? "Recovery"}.` }
         ...q.sideQuest.map((m) => ({ title: m.name, subtitle: `${m.target[0]} ${m.kind === "hold" ? "s" : "reps"}${m.perSide ? " per side" : ""}`, tone: "muted" }))
       ]
     });
+  }
+  if (q.type === "recovery" && !walkedToday(state, today)) {
+    blocks.push({ type: "text", tone: "muted", text: `Bonus: a 30-minute walk today is worth +${XP.walk} XP. Log it whenever you are back.` });
   }
   if (q.type === "gate") {
     blocks.push({ type: "actions", buttons: [{ label: "\u25B6  ENTER THE GATE", tool: "plugin_fitness_start", variant: "primary" }] });
@@ -2173,10 +2594,12 @@ function completeBlocks(state, a, today) {
       { label: "XP gained", value: `+${f.xp}`, tone: "ok" },
       { label: "Level", value: f.levelAfter > f.levelBefore ? `${f.levelBefore} \u2192 ${f.levelAfter}` : String(f.levelAfter), tone: f.levelAfter > f.levelBefore ? "ok" : "default" },
       { label: "Rank", value: f.rankAfter !== f.rankBefore ? `${f.rankBefore} \u2192 ${f.rankAfter}` : f.rankAfter, tone: f.rankAfter !== f.rankBefore ? "ok" : "default" },
-      { label: "Streak", value: `${streak(state, today)} days` }
+      { label: "Streak", value: `${streakInfo(state, today).days} days` }
     ]
   });
   const items = [
+    ...(f.titles ?? []).map((n) => ({ title: `Title earned: ${n}`, subtitle: TITLES.find((t) => t.name === n)?.desc, badge: `+${XP.title} XP`, tone: "ok" })),
+    ...(f.treasures ?? []).map((t) => ({ title: `Treasure unlocked: ${t.name}`, subtitle: "You earned it. Go get it in the real world.", badge: "treasure", tone: "ok" })),
     ...f.sideQuest ? [{ title: `Side quest complete: ${f.sideQuest}`, badge: `+${XP.sideQuest} XP`, tone: "ok" }] : [],
     ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: "new", tone: "ok" })),
     ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: "build the base, then climb again", tone: "warn" })),
@@ -2184,6 +2607,10 @@ function completeBlocks(state, a, today) {
     ...f.skipped.map((n) => ({ title: `${n} \u2014 skipped`, tone: "muted" }))
   ];
   if (items.length) blocks.push({ type: "list", items });
+  const claimable = (state.treasures ?? []).filter((t) => t.unlockedAt && !t.claimedAt).slice(0, 4);
+  if (claimable.length) {
+    blocks.push({ type: "actions", buttons: claimable.map((t) => ({ label: `\u2713 Claimed: ${t.name}`, tool: "plugin_fitness_treasure", args: { action: "claim", id: t.id }, variant: "primary" })) });
+  }
   for (const i of state.injuries) {
     const where = `${i.side === "both" ? "" : `${i.side} `}${i.area.replace("_", " ")}`;
     blocks.push({
@@ -2195,24 +2622,53 @@ function completeBlocks(state, a, today) {
       fields: [{ name: "pain", label: "Pain (0 = gone)", kind: "slider", min: 0, max: 10, value: i.pain, unit: "/10", hint: `It was ${i.pain}/10. At 2 or less the full exercises come back.` }]
     });
   }
+  blocks.push(...bonusBlocks(state, today));
   const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
   blocks.push({ type: "text", text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? "Recovery"}.` });
+  return blocks;
+}
+var walkedToday = (state, today) => (state.walks ?? []).includes(today);
+function bonusBlocks(state, today) {
+  const blocks = [];
+  if (!walkedToday(state, today)) {
+    blocks.push({ type: "actions", buttons: [{ label: `\u{1F6B6} I walked 30 min today (+${XP.walk} XP)`, tool: "plugin_fitness_walk", args: { minutes: 30 } }] });
+  }
+  const last = [...state.body].reverse().find((b) => b.weightKg !== void 0);
+  if (!last || daysBetween(last.date, today) >= 7) {
+    blocks.push({
+      type: "form",
+      title: "Weekly weigh-in",
+      tool: "plugin_fitness_profile",
+      button: "Log it",
+      fields: [
+        { name: "weight_kg", label: "Weight", kind: "number", unit: "kg", value: last?.weightKg, min: 30, max: 250, step: 0.1, required: true, hint: last ? `Last: ${last.weightKg} kg on ${last.date}.` : "Morning, before breakfast, is the most honest number." },
+        { name: "waist_cm", label: "Waist (optional)", kind: "number", unit: "cm", min: 40, max: 200, step: 0.5, hint: "At the belly button. Strength shows here before the scale moves." }
+      ]
+    });
+  }
   return blocks;
 }
 function statusBlocks(state, today) {
   const level = hunterLevel(state.xp);
   const s = stats(state, today);
-  const st = streak(state, today);
+  const si = streakInfo(state, today);
+  const st = si.days;
   const base = xpForLevel(level);
+  const title = titleName(state.activeTitle);
   const blocks = [
     { type: "heading", text: "Status Window" },
     {
       type: "stats",
       items: [
-        { label: "Hunter", value: state.profile.name || "Unnamed", hint: `Day ${daysBetween(state.startDate, today) + 1}` },
+        { label: "Hunter", value: state.profile.name || "Unnamed", hint: `${title ? `"${title}" \xB7 ` : ""}Day ${daysBetween(state.startDate, today) + 1}` },
         { label: "Rank", value: state.rank, tone: "ok" },
         { label: "Level", value: String(level), hint: `${state.xp} XP` },
-        { label: "Streak", value: `${st} day${st === 1 ? "" : "s"}`, tone: st > 0 ? "ok" : "muted" },
+        {
+          label: "Streak",
+          value: `${st} day${st === 1 ? "" : "s"}`,
+          tone: st > 0 ? "ok" : "muted",
+          hint: `\u{1F6E1} ${si.shields} shield${si.shields === 1 ? "" : "s"}${si.shields < 2 ? ` \xB7 next in ${si.toNextShield} day${si.toNextShield === 1 ? "" : "s"}` : ""}`
+        },
         { label: "STR", value: String(s.STR), hint: "pull \xB7 push \xB7 dip" },
         { label: "AGI", value: String(s.AGI), hint: "core \xB7 L-sit" },
         { label: "VIT", value: String(s.VIT), hint: "legs \xB7 hinge" },
@@ -2236,7 +2692,7 @@ function statusBlocks(state, today) {
 }
 function pathBlocks(state, today) {
   const week = weekPlan(state, today);
-  const mark = { done: "\u2713", today: "\u25B6", planned: "", missed: "\u2717", before: "" };
+  const mark = { done: "\u2713", today: "\u25B6", planned: "", missed: "\u2717", shielded: "\u{1F6E1}", before: "" };
   const blocks = [
     { type: "heading", text: "Your Path" },
     {
@@ -2247,14 +2703,17 @@ function pathBlocks(state, today) {
     {
       type: "text",
       tone: "muted",
-      text: `Training days: ${formatDays(state.profile.trainingDays)} at ${state.profile.questTime}. Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week.`
+      text: `Training days: ${formatDays(state.profile.trainingDays)} at ${state.profile.questTime}. Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week. Every 7 days in a row earn a streak shield (max 2): a missed day spends one instead of breaking the streak.`
     }
   ];
   blocks.push({
     type: "list",
     items: ladderProgress(state).map((p) => ({
       title: `${p.name}: ${p.current}`,
-      subtitle: p.held ? `On hold \u2014 ${p.held}. A lighter exercise stands in until then.` : p.next ? `Next: ${p.next} \u2014 ${p.needs} (${p.top}/2 done)` : "Top of this ladder \u2014 keep it sharp.",
+      subtitle: [
+        p.held ? `On hold \u2014 ${p.held}. A lighter exercise stands in until then.` : p.next ? `Next: ${p.next} \u2014 ${p.needs} (${p.top}/2 done).` : "Top of this ladder \u2014 keep it sharp.",
+        p.feat ? `Real world: ${p.feat}` : ""
+      ].filter(Boolean).join(" "),
       badge: `${p.level}/${p.of}`,
       tone: p.held ? "warn" : p.top > 0 ? "ok" : "default"
     }))
@@ -2281,23 +2740,125 @@ function pathBlocks(state, today) {
   }
   return blocks;
 }
-function codexBlocks(state) {
-  const blocks = [{ type: "heading", text: "Skill Codex" }, { type: "text", tone: "muted", text: "Every exercise in the System. Open one to see how it moves." }];
-  const seen = /* @__PURE__ */ new Set();
-  for (const l of Object.values(LADDERS)) {
-    l.levels.forEach((id, i) => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      const ex = exercise(id);
-      const tracked = l.id !== "pull_floor" ? state.levels[l.id] : 0;
-      const tag = i < tracked ? " \u2713" : i === tracked ? " \u25C0 you are here" : "";
-      blocks.push(figure(ex, { title: `${l.name} ${i + 1} \xB7 ${ex.name}${tag}`, caption: `${ex.sets} \xD7 ${ex.min}\u2013${ex.max} ${unitOf(ex)}${ex.perSide ? " per side" : ""}`, collapsed: true }));
+function journeyBlocks(state, today) {
+  const check = rankChecklist(state);
+  const met = check ? check.items.filter((i) => i.met).length : 0;
+  const blocks = [
+    { type: "heading", text: "Journey" },
+    {
+      type: "figure",
+      svg: journeyMapSvg(state, today),
+      alt: `Journey map: rank ${state.rank} of E to S`,
+      size: "lg",
+      caption: check ? `Rank ${state.rank} \u2192 ${check.rank}: ${met} of ${check.items.length} requirements met. Closest next:` : "Rank S reached. Closest next:",
+      bullets: nextGoals(state, today)
+    }
+  ];
+  if (state.quests.length) {
+    blocks.push({ type: "table", columns: ["Then vs now", `Day 1 (${state.startDate})`, "Now"], rows: thenVsNow(state) });
+  }
+  return blocks;
+}
+var WHEN_LABEL = { level: "Reach a level", rank: "Reach a rank", streak: "Keep a streak (days)", quests: "Complete N quests", title: "Earn a title" };
+function treasureBlocks(state, today) {
+  const all = state.treasures ?? [];
+  const open = all.filter((t) => !t.unlockedAt);
+  const ready = all.filter((t) => t.unlockedAt && !t.claimedAt);
+  const claimed = all.filter((t) => t.claimedAt).slice(-5).reverse();
+  const blocks = [
+    { type: "heading", text: "Treasure" },
+    {
+      type: "text",
+      tone: "muted",
+      text: "Real rewards you set for yourself: the System tells you when you have earned one. Small ones early (a coffee you love, a new playlist), bigger ones later (running shoes at level 10, a massage at a 30-day streak, a trip at rank C)."
+    }
+  ];
+  if (ready.length) {
+    blocks.push({ type: "list", items: ready.map((t) => ({ title: `${t.name} \u2014 UNLOCKED`, subtitle: `${treasureGoal(t)} reached on ${t.unlockedAt}. Go get it.`, badge: "ready", tone: "ok" })) });
+    blocks.push({ type: "actions", buttons: ready.slice(0, 4).map((t) => ({ label: `\u2713 Claimed: ${t.name}`, tool: "plugin_fitness_treasure", args: { action: "claim", id: t.id }, variant: "primary" })) });
+  }
+  for (const t of open.slice(0, 8)) {
+    const p = treasureProgress(state, t, today);
+    blocks.push({ type: "progress", label: `${t.name} \xB7 ${treasureGoal(t)}`, value: p.now, max: p.of, hint: treasureProgressText(state, t, p) });
+  }
+  if (!all.length) blocks.push({ type: "text", text: "No treasure yet. Set your first one below \u2014 something small you would enjoy after a week of quests." });
+  if (claimed.length) {
+    blocks.push({ type: "list", items: claimed.map((t) => ({ title: `${t.name}`, subtitle: `claimed ${t.claimedAt}`, badge: "claimed", tone: "muted" })) });
+  }
+  blocks.push({
+    type: "form",
+    title: "Set a treasure",
+    tool: "plugin_fitness_treasure",
+    args: { action: "add" },
+    button: "Add treasure",
+    fields: [
+      { name: "name", label: "Reward", kind: "text", maxLength: 60, required: true, placeholder: "e.g. New running shoes" },
+      { name: "when", label: "Earned when I\u2026", kind: "select", value: "level", options: TREASURE_WHEN.map((w) => ({ value: w, label: WHEN_LABEL[w] })) },
+      { name: "value", label: "Goal", kind: "text", required: true, placeholder: "e.g. 10", hint: `Level / days / quests: a number. Rank: D, C, B, A or S. Title: its name, e.g. ${TITLES[4].name}.` }
+    ]
+  });
+  if (open.length || ready.length) {
+    blocks.push({
+      type: "form",
+      title: "Remove a treasure",
+      tool: "plugin_fitness_treasure",
+      args: { action: "remove" },
+      button: "Remove",
+      fields: [{ name: "id", label: "Which one", kind: "select", options: [...ready, ...open].map((t) => ({ value: String(t.id), label: `${t.name} (${treasureGoal(t)})` })) }]
     });
   }
-  for (const ex of EXERCISES) {
-    if (seen.has(ex.id)) continue;
-    blocks.push(figure(ex, { title: `Mobility \xB7 ${ex.name}`, caption: `${ex.min} ${unitOf(ex)}${ex.perSide ? " per side" : ""}`, collapsed: true }));
+  return blocks;
+}
+function titleBlocks(state, today) {
+  const all = titleStatus(state, today);
+  const earned = all.filter((t) => t.earned);
+  const locked = all.filter((t) => !t.earned);
+  const blocks = [
+    { type: "heading", text: "Titles" },
+    {
+      type: "list",
+      items: [
+        ...earned.map((t) => ({ title: t.name, subtitle: `${t.desc} Earned ${t.earned}.`, badge: t.id === state.activeTitle ? "active" : "earned", tone: "ok" })),
+        ...locked.slice(0, 6).map((t) => ({ title: t.name, subtitle: t.desc, badge: `${t.now}/${t.of}`, tone: "muted" }))
+      ]
+    }
+  ];
+  if (locked.length > 6) blocks.push({ type: "text", tone: "muted", text: `${locked.length - 6} more titles wait further down the path.` });
+  if (earned.length >= 2) {
+    blocks.push({
+      type: "form",
+      title: "Title shown under your name",
+      tool: "plugin_fitness_title",
+      button: "Use this title",
+      fields: [{ name: "id", label: "Title", kind: "select", value: state.activeTitle, options: earned.map((t) => ({ value: t.id, label: t.name })) }]
+    });
   }
+  return blocks;
+}
+function codexBlocks(state) {
+  const blocks = [
+    { type: "heading", text: "Skill Codex" },
+    { type: "text", tone: "muted", text: "Where you stand on every ladder, and the next skill. Open one to see how it moves." }
+  ];
+  const seen = /* @__PURE__ */ new Set();
+  for (const l of TRACKED_LADDERS) {
+    const levels = LADDERS[l].levels;
+    const at2 = state.levels[l];
+    for (const [i, tag] of [[at2, "\u25C0 you are here"], [at2 + 1, "next"]]) {
+      const id = levels[i];
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const ex = exercise(id);
+      const feat = featOf(id);
+      blocks.push(figure(ex, {
+        title: `${LADDERS[l].name} ${i + 1}/${levels.length} \xB7 ${ex.name} ${tag}`,
+        caption: `${ex.sets} \xD7 ${ex.min}\u2013${ex.max} ${unitOf(ex)}${ex.perSide ? " per side" : ""}${feat ? `
+Real world: ${feat}` : ""}`,
+        collapsed: true
+      }));
+    }
+  }
+  blocks.push({ type: "text", tone: "muted", text: "Warm-up, mobility and rehab moves show their animation inside the quest." });
   return blocks;
 }
 function historyBlocks(state, today) {
@@ -2429,6 +2990,7 @@ function awakening(defaultTimezone) {
 var PAGE_ID = "the-system";
 var PAGE_URL = `/apps/${PAGE_ID}`;
 var WARNING_TIME = "19:30";
+var REPORT_TIME = "20:00";
 function optNum(v, name, min, max) {
   if (v === void 0 || v === null || v === "") return void 0;
   const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
@@ -2526,7 +3088,9 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
     let out;
     store.update(STATE_KEY, (cur) => {
       if (!cur || cur.version !== 2) throw new Error("No Hunter yet. Run plugin_fitness_setup first.");
-      out = fn(cur, today(cur).date);
+      const date = today(cur).date;
+      out = fn(cur, date);
+      checkRewards(cur, date);
       return cur;
     });
     return out;
@@ -2541,15 +3105,20 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
   function statusOf(s) {
     const { date } = today(s);
     const level = hunterLevel(s.xp);
+    const si = streakInfo(s, date);
     return {
       hunter: s.profile.name ?? null,
+      title: titleName(s.activeTitle),
       day: Math.round((Date.parse(date) - Date.parse(s.startDate)) / 864e5) + 1,
       rank: s.rank,
       level,
       xp: s.xp,
       xp_to_next_level: xpForLevel(level + 1) - s.xp,
       stats: stats(s, date),
-      streak_days: streak(s, date),
+      streak_days: si.days,
+      streak_shields: si.shields,
+      titles_earned: titleStatus(s, date).filter((t) => t.earned).map((t) => t.name),
+      treasures: (s.treasures ?? []).filter((t) => !t.claimedAt).map((t) => ({ id: t.id, name: t.name, goal: treasureGoal(t), unlocked: !!t.unlockedAt, ...treasureProgress(s, t, date) })),
       injuries: s.injuries,
       skills: Object.fromEntries(
         TRACKED_LADDERS.map((l) => {
@@ -2966,11 +3535,114 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
       };
     }
   });
+  registry.registerTool({
+    name: "plugin_fitness_treasure",
+    description: "Treasure: real-world rewards the Hunter sets for themselves, unlocked by progress. action 'add' (name, when: level|rank|streak|quests|title, value: e.g. 10, 'C' or a title name), 'claim' (id, once unlocked and enjoyed), 'remove' (id) or 'list'. Suggest small rewards early and bigger ones later.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["add", "claim", "remove", "list"] },
+        name: { type: "string" },
+        when: { type: "string", enum: TREASURE_WHEN },
+        value: { type: ["string", "number"] },
+        id: { type: ["number", "string"] }
+      },
+      required: ["action"],
+      additionalProperties: false
+    },
+    handler: (args) => {
+      const id = () => {
+        const n = Number(args.id);
+        if (!Number.isInteger(n) || n < 1) throw new Error("id must be the treasure number");
+        return n;
+      };
+      const list = (s, date) => (s.treasures ?? []).map((t) => ({ id: t.id, name: t.name, goal: treasureGoal(t), ...treasureProgress(s, t, date), unlocked: t.unlockedAt ?? null, claimed: t.claimedAt ?? null }));
+      if (args.action === "list") {
+        const s = need();
+        return { treasures: list(s, today(s).date) };
+      }
+      return mutate((s, date) => {
+        switch (args.action) {
+          case "add": {
+            const t = addTreasure(s, date, String(args.name ?? ""), String(args.when ?? ""), args.value);
+            return { added: { id: t.id, name: t.name, goal: treasureGoal(t) }, treasures: list(s, date) };
+          }
+          case "claim": {
+            const t = claimTreasure(s, date, id());
+            return { claimed: t.name, message: `[SYSTEM] Treasure claimed: ${t.name}. Enjoy it, Hunter.` };
+          }
+          case "remove":
+            return { removed: removeTreasure(s, id()).name, treasures: list(s, date) };
+          default:
+            throw new Error("action must be 'add', 'claim', 'remove' or 'list'");
+        }
+      });
+    }
+  });
+  registry.registerTool({
+    name: "plugin_fitness_title",
+    description: "Titles the Hunter has earned and the ones still ahead (with progress). Pass id (or name) of an earned title to show it under the Hunter name.",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, additionalProperties: false },
+    handler: (args) => {
+      if (args.id === void 0 || args.id === "") {
+        const s = need();
+        return { active: titleName(s.activeTitle), titles: titleStatus(s, today(s).date) };
+      }
+      return mutate((s) => ({ active: chooseTitle(s, String(args.id)) }));
+    }
+  });
+  registry.registerTool({
+    name: "plugin_fitness_walk",
+    description: "Log a bonus walk of about 30 minutes (at least 20): +20 XP, once a day, any day. Easy extra movement, best on recovery days.",
+    inputSchema: { type: "object", properties: { minutes: { type: "number" }, date: { type: "string", description: "YYYY-MM-DD, default today" } }, additionalProperties: false },
+    handler: (args) => {
+      const minutes = optNum(args.minutes, "minutes", 1, 600) ?? 30;
+      return mutate((s) => {
+        const d = optDate(args.date, s);
+        const r = logWalk(s, d, minutes);
+        return { ...r, date: d, message: r.already ? "A walk is already logged for that day." : `[SYSTEM] Bonus walk logged. (+${r.xp} XP)` };
+      });
+    }
+  });
+  function combine(msgs) {
+    if (msgs.length === 1) return msgs[0];
+    const actions = msgs.flatMap((m) => m.actions ?? []).slice(0, 2);
+    return { title: `[SYSTEM] ${msgs.length} new messages`, body: msgs.map((m) => m.body).join("\n"), ...actions.length ? { actions } : {} };
+  }
+  async function send(n) {
+    try {
+      await registry.notify({ url: PAGE_URL, ...n });
+    } catch (err) {
+      console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   async function tick() {
     const s = read();
     if (!s || !registry.notify) return { sent: null };
     const { date, time } = today(s);
     if (date < s.startDate) return { sent: null };
+    if (s.outbox?.length) {
+      let msgs = [];
+      store.update(STATE_KEY, (cur) => {
+        if (cur) {
+          msgs = cur.outbox ?? [];
+          delete cur.outbox;
+        }
+        return cur;
+      });
+      if (msgs.length) {
+        await send({ ...combine(msgs), tag: `fitness-reward-${clock.now().getTime()}` });
+        return { sent: "reward" };
+      }
+    }
+    if (weekday(date) === 0 && time >= REPORT_TIME && s.notified.weekly !== date && s.startDate < date) {
+      store.update(STATE_KEY, (cur) => {
+        if (cur) cur.notified = { ...cur.notified, weekly: date };
+        return cur;
+      });
+      await send({ ...weeklyReport(s, date), tag: `fitness-week-${date}` });
+      return { sent: "weekly" };
+    }
     const q = questFor(s, date);
     if (q.done) return { sent: null };
     let kind = null;
@@ -2983,16 +3655,11 @@ function registerFitness(registry, clock = { now: () => /* @__PURE__ */ new Date
     });
     const names = q.main.map((m) => m.name).join(", ");
     const n = kind === "warning" ? { title: T.notify.warningTitle, body: T.notify.warningBody } : q.type === "gate" ? { title: T.notify.gateTitle, body: "Today is a test day. Warm up, then one all-out set of each trial." } : q.type === "training" ? { title: T.notify.questTitle, body: `Training ${q.session}: ${names}.${q.deload ? " Deload week." : ""}` } : { title: T.notify.recoveryTitle, body: `Mobility, about 10 minutes: ${names}.` };
-    try {
-      await registry.notify({
-        ...n,
-        url: PAGE_URL,
-        tag: `fitness-${date}`,
-        ...q.type === "recovery" && kind === "quest" ? { actions: [{ label: "Done", tool: "plugin_fitness_complete", args: { date } }] } : {}
-      });
-    } catch (err) {
-      console.error(`fitness: notify failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    await send({
+      ...n,
+      tag: `fitness-${date}`,
+      ...q.type === "recovery" && kind === "quest" ? { actions: [{ label: "Done", tool: "plugin_fitness_complete", args: { date } }] } : {}
+    });
     return { sent: kind };
   }
   if (typeof registry.schedule === "function" && typeof registry.notify === "function") {

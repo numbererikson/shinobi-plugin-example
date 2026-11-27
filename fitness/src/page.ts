@@ -4,14 +4,18 @@
 // Layout, top to bottom:
 //   1. Today — START screen, the current step of a running quest, the rest
 //      countdown, or the QUEST COMPLETE screen.
-//   2. Status Window.
-//   3. Your Path — this week, every skill ladder with its unlock progress,
-//      the next rank checklist and the next Gate.
-//   4. Skill Codex — every exercise with its animation.
-//   5. History, then the profile and pain forms.
+//   2. Status Window (with the active title and streak shields).
+//   3. Journey — the map E→S, what is closest, then vs now.
+//   4. Your Path — this week, every skill ladder with its unlock progress and
+//      real-world feat, the next rank checklist and the next Gate.
+//   5. Treasure — real rewards the hunter sets; 6. Titles.
+//   7. Skill Codex — the current and next exercise of every ladder.
+//   8. History, then the profile and pain forms.
 
-import { AREAS, EXERCISES, exercise, LADDERS, type Exercise } from './exercises.js';
+import { AREAS, exercise, LADDERS, TRACKED_LADDERS, type Exercise } from './exercises.js';
+import { featOf } from './feats.js';
 import { renderFigure } from './figure.js';
+import { journeyMapSvg, nextGoals, thenVsNow, titleName, titleStatus, treasureGoal, treasureProgress, treasureProgressText, TREASURE_WHEN, TITLES } from './journey.js';
 import { activeToday, restLeft } from './session.js';
 import {
   addDays,
@@ -22,7 +26,7 @@ import {
   questFor,
   rankChecklist,
   stats,
-  streak,
+  streakInfo,
   TEST_LABEL,
   weekPlan,
   XP,
@@ -90,7 +94,10 @@ export function renderPage(state: HunterState | null, today: string, now: Date, 
   if (running) return refreshSeconds ? { blocks, refreshSeconds } : { blocks };
 
   blocks.push({ type: 'divider' }, ...statusBlocks(state, today));
+  blocks.push({ type: 'divider' }, ...journeyBlocks(state, today));
   blocks.push({ type: 'divider' }, ...pathBlocks(state, today));
+  blocks.push({ type: 'divider' }, ...treasureBlocks(state, today));
+  blocks.push({ type: 'divider' }, ...titleBlocks(state, today));
   blocks.push({ type: 'divider' }, ...codexBlocks(state));
   blocks.push({ type: 'divider' }, ...historyBlocks(state, today));
   blocks.push({ type: 'divider' }, { type: 'heading', text: 'Profile' }, profileForm(state), painForm());
@@ -107,6 +114,7 @@ function startBlocks(state: HunterState, today: string): Block[] {
     return [
       { type: 'heading', text: title },
       { type: 'text', tone: 'ok', text: `${T.questDone}\nTomorrow: ${next?.label ?? 'Recovery'}.` },
+      ...bonusBlocks(state, today),
     ];
   }
   const items = q.type === 'gate'
@@ -148,6 +156,9 @@ function startBlocks(state: HunterState, today: string): Block[] {
         ...q.sideQuest.map((m) => ({ title: m.name, subtitle: `${m.target[0]} ${m.kind === 'hold' ? 's' : 'reps'}${m.perSide ? ' per side' : ''}`, tone: 'muted' })),
       ],
     });
+  }
+  if (q.type === 'recovery' && !walkedToday(state, today)) {
+    blocks.push({ type: 'text', tone: 'muted', text: `Bonus: a 30-minute walk today is worth +${XP.walk} XP. Log it whenever you are back.` });
   }
   if (q.type === 'gate') {
     blocks.push({ type: 'actions', buttons: [{ label: '▶  ENTER THE GATE', tool: 'plugin_fitness_start', variant: 'primary' }] });
@@ -261,10 +272,12 @@ function completeBlocks(state: HunterState, a: ActiveSession, today: string): Bl
       { label: 'XP gained', value: `+${f.xp}`, tone: 'ok' },
       { label: 'Level', value: f.levelAfter > f.levelBefore ? `${f.levelBefore} → ${f.levelAfter}` : String(f.levelAfter), tone: f.levelAfter > f.levelBefore ? 'ok' : 'default' },
       { label: 'Rank', value: f.rankAfter !== f.rankBefore ? `${f.rankBefore} → ${f.rankAfter}` : f.rankAfter, tone: f.rankAfter !== f.rankBefore ? 'ok' : 'default' },
-      { label: 'Streak', value: `${streak(state, today)} days` },
+      { label: 'Streak', value: `${streakInfo(state, today).days} days` },
     ],
   });
   const items = [
+    ...(f.titles ?? []).map((n) => ({ title: `Title earned: ${n}`, subtitle: TITLES.find((t) => t.name === n)?.desc, badge: `+${XP.title} XP`, tone: 'ok' })),
+    ...(f.treasures ?? []).map((t) => ({ title: `Treasure unlocked: ${t.name}`, subtitle: 'You earned it. Go get it in the real world.', badge: 'treasure', tone: 'ok' })),
     ...(f.sideQuest ? [{ title: `Side quest complete: ${f.sideQuest}`, badge: `+${XP.sideQuest} XP`, tone: 'ok' }] : []),
     ...f.unlocked.map((n) => ({ title: `Skill unlocked: ${n}`, badge: 'new', tone: 'ok' })),
     ...f.recalibrated.map((n) => ({ title: `Recalibrated to ${n}`, subtitle: 'build the base, then climb again', tone: 'warn' })),
@@ -272,6 +285,10 @@ function completeBlocks(state: HunterState, a: ActiveSession, today: string): Bl
     ...f.skipped.map((n) => ({ title: `${n} — skipped`, tone: 'muted' })),
   ];
   if (items.length) blocks.push({ type: 'list', items });
+  const claimable = (state.treasures ?? []).filter((t) => t.unlockedAt && !t.claimedAt).slice(0, 4);
+  if (claimable.length) {
+    blocks.push({ type: 'actions', buttons: claimable.map((t) => ({ label: `✓ Claimed: ${t.name}`, tool: 'plugin_fitness_treasure', args: { action: 'claim', id: t.id }, variant: 'primary' })) });
+  }
   // Pain check: one slider per status effect, pre-set to the last value.
   for (const i of state.injuries) {
     const where = `${i.side === 'both' ? '' : `${i.side} `}${i.area.replace('_', ' ')}`;
@@ -284,8 +301,33 @@ function completeBlocks(state: HunterState, a: ActiveSession, today: string): Bl
       fields: [{ name: 'pain', label: 'Pain (0 = gone)', kind: 'slider', min: 0, max: 10, value: i.pain, unit: '/10', hint: `It was ${i.pain}/10. At 2 or less the full exercises come back.` }],
     });
   }
+  blocks.push(...bonusBlocks(state, today));
   const tomorrow = weekPlan(state, addDays(today, 1)).find((d) => d.date === addDays(today, 1));
   blocks.push({ type: 'text', text: `[SYSTEM] Well done, Hunter. Tomorrow: ${tomorrow?.label ?? 'Recovery'}.` });
+  return blocks;
+}
+
+const walkedToday = (state: HunterState, today: string): boolean => (state.walks ?? []).includes(today);
+
+/** After the quest: the bonus walk and, once a week, the weigh-in. */
+function bonusBlocks(state: HunterState, today: string): Block[] {
+  const blocks: Block[] = [];
+  if (!walkedToday(state, today)) {
+    blocks.push({ type: 'actions', buttons: [{ label: `🚶 I walked 30 min today (+${XP.walk} XP)`, tool: 'plugin_fitness_walk', args: { minutes: 30 } }] });
+  }
+  const last = [...state.body].reverse().find((b) => b.weightKg !== undefined);
+  if (!last || daysBetween(last.date, today) >= 7) {
+    blocks.push({
+      type: 'form',
+      title: 'Weekly weigh-in',
+      tool: 'plugin_fitness_profile',
+      button: 'Log it',
+      fields: [
+        { name: 'weight_kg', label: 'Weight', kind: 'number', unit: 'kg', value: last?.weightKg, min: 30, max: 250, step: 0.1, required: true, hint: last ? `Last: ${last.weightKg} kg on ${last.date}.` : 'Morning, before breakfast, is the most honest number.' },
+        { name: 'waist_cm', label: 'Waist (optional)', kind: 'number', unit: 'cm', min: 40, max: 200, step: 0.5, hint: 'At the belly button. Strength shows here before the scale moves.' },
+      ],
+    });
+  }
   return blocks;
 }
 
@@ -294,17 +336,24 @@ function completeBlocks(state: HunterState, a: ActiveSession, today: string): Bl
 function statusBlocks(state: HunterState, today: string): Block[] {
   const level = hunterLevel(state.xp);
   const s = stats(state, today);
-  const st = streak(state, today);
+  const si = streakInfo(state, today);
+  const st = si.days;
   const base = xpForLevel(level);
+  const title = titleName(state.activeTitle);
   const blocks: Block[] = [
     { type: 'heading', text: 'Status Window' },
     {
       type: 'stats',
       items: [
-        { label: 'Hunter', value: state.profile.name || 'Unnamed', hint: `Day ${daysBetween(state.startDate, today) + 1}` },
+        { label: 'Hunter', value: state.profile.name || 'Unnamed', hint: `${title ? `"${title}" · ` : ''}Day ${daysBetween(state.startDate, today) + 1}` },
         { label: 'Rank', value: state.rank, tone: 'ok' },
         { label: 'Level', value: String(level), hint: `${state.xp} XP` },
-        { label: 'Streak', value: `${st} day${st === 1 ? '' : 's'}`, tone: st > 0 ? 'ok' : 'muted' },
+        {
+          label: 'Streak',
+          value: `${st} day${st === 1 ? '' : 's'}`,
+          tone: st > 0 ? 'ok' : 'muted',
+          hint: `🛡 ${si.shields} shield${si.shields === 1 ? '' : 's'}${si.shields < 2 ? ` · next in ${si.toNextShield} day${si.toNextShield === 1 ? '' : 's'}` : ''}`,
+        },
         { label: 'STR', value: String(s.STR), hint: 'pull · push · dip' },
         { label: 'AGI', value: String(s.AGI), hint: 'core · L-sit' },
         { label: 'VIT', value: String(s.VIT), hint: 'legs · hinge' },
@@ -331,7 +380,7 @@ function statusBlocks(state: HunterState, today: string): Block[] {
 
 function pathBlocks(state: HunterState, today: string): Block[] {
   const week = weekPlan(state, today);
-  const mark = { done: '✓', today: '▶', planned: '', missed: '✗', before: '' } as const;
+  const mark = { done: '✓', today: '▶', planned: '', missed: '✗', shielded: '🛡', before: '' } as const;
   const blocks: Block[] = [
     { type: 'heading', text: 'Your Path' },
     {
@@ -344,18 +393,22 @@ function pathBlocks(state: HunterState, today: string): Block[] {
       tone: 'muted',
       text:
         `Training days: ${formatDays(state.profile.trainingDays)} at ${state.profile.questTime}. ` +
-        `Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week.`,
+        `Every exercise climbs a ladder: hit the top of its range in two sessions and the next one unlocks. Every 5th week is a lighter deload week. ` +
+        `Every 7 days in a row earn a streak shield (max 2): a missed day spends one instead of breaking the streak.`,
     },
   ];
   blocks.push({
     type: 'list',
     items: ladderProgress(state).map((p) => ({
       title: `${p.name}: ${p.current}`,
-      subtitle: p.held
-        ? `On hold — ${p.held}. A lighter exercise stands in until then.`
-        : p.next
-          ? `Next: ${p.next} — ${p.needs} (${p.top}/2 done)`
-          : 'Top of this ladder — keep it sharp.',
+      subtitle: [
+        p.held
+          ? `On hold — ${p.held}. A lighter exercise stands in until then.`
+          : p.next
+            ? `Next: ${p.next} — ${p.needs} (${p.top}/2 done).`
+            : 'Top of this ladder — keep it sharp.',
+        p.feat ? `Real world: ${p.feat}` : '',
+      ].filter(Boolean).join(' '),
       badge: `${p.level}/${p.of}`,
       tone: p.held ? 'warn' : p.top > 0 ? 'ok' : 'default',
     })),
@@ -383,25 +436,136 @@ function pathBlocks(state: HunterState, today: string): Block[] {
   return blocks;
 }
 
-// ---- 4. Skill Codex ---------------------------------------------------------------------
+// ---- 3. Journey -----------------------------------------------------------------------------
 
-function codexBlocks(state: HunterState): Block[] {
-  const blocks: Block[] = [{ type: 'heading', text: 'Skill Codex' }, { type: 'text', tone: 'muted', text: 'Every exercise in the System. Open one to see how it moves.' }];
-  const seen = new Set<string>();
-  for (const l of Object.values(LADDERS)) {
-    l.levels.forEach((id, i) => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      const ex = exercise(id);
-      const tracked = l.id !== 'pull_floor' ? state.levels[l.id as keyof HunterState['levels']] : 0;
-      const tag = i < tracked ? ' ✓' : i === tracked ? ' ◀ you are here' : '';
-      blocks.push(figure(ex, { title: `${l.name} ${i + 1} · ${ex.name}${tag}`, caption: `${ex.sets} × ${ex.min}–${ex.max} ${unitOf(ex)}${ex.perSide ? ' per side' : ''}`, collapsed: true }));
+function journeyBlocks(state: HunterState, today: string): Block[] {
+  const check = rankChecklist(state);
+  const met = check ? check.items.filter((i) => i.met).length : 0;
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Journey' },
+    {
+      type: 'figure',
+      svg: journeyMapSvg(state, today),
+      alt: `Journey map: rank ${state.rank} of E to S`,
+      size: 'lg',
+      caption: check ? `Rank ${state.rank} → ${check.rank}: ${met} of ${check.items.length} requirements met. Closest next:` : 'Rank S reached. Closest next:',
+      bullets: nextGoals(state, today),
+    },
+  ];
+  if (state.quests.length) {
+    blocks.push({ type: 'table', columns: ['Then vs now', `Day 1 (${state.startDate})`, 'Now'], rows: thenVsNow(state) });
+  }
+  return blocks;
+}
+
+// ---- 5. Treasure ------------------------------------------------------------------------------
+
+const WHEN_LABEL: Record<string, string> = { level: 'Reach a level', rank: 'Reach a rank', streak: 'Keep a streak (days)', quests: 'Complete N quests', title: 'Earn a title' };
+
+function treasureBlocks(state: HunterState, today: string): Block[] {
+  const all = state.treasures ?? [];
+  const open = all.filter((t) => !t.unlockedAt);
+  const ready = all.filter((t) => t.unlockedAt && !t.claimedAt);
+  const claimed = all.filter((t) => t.claimedAt).slice(-5).reverse();
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Treasure' },
+    {
+      type: 'text',
+      tone: 'muted',
+      text: 'Real rewards you set for yourself: the System tells you when you have earned one. Small ones early (a coffee you love, a new playlist), bigger ones later (running shoes at level 10, a massage at a 30-day streak, a trip at rank C).',
+    },
+  ];
+  if (ready.length) {
+    blocks.push({ type: 'list', items: ready.map((t) => ({ title: `${t.name} — UNLOCKED`, subtitle: `${treasureGoal(t)} reached on ${t.unlockedAt}. Go get it.`, badge: 'ready', tone: 'ok' })) });
+    blocks.push({ type: 'actions', buttons: ready.slice(0, 4).map((t) => ({ label: `✓ Claimed: ${t.name}`, tool: 'plugin_fitness_treasure', args: { action: 'claim', id: t.id }, variant: 'primary' })) });
+  }
+  for (const t of open.slice(0, 8)) {
+    const p = treasureProgress(state, t, today);
+    blocks.push({ type: 'progress', label: `${t.name} · ${treasureGoal(t)}`, value: p.now, max: p.of, hint: treasureProgressText(state, t, p) });
+  }
+  if (!all.length) blocks.push({ type: 'text', text: 'No treasure yet. Set your first one below — something small you would enjoy after a week of quests.' });
+  if (claimed.length) {
+    blocks.push({ type: 'list', items: claimed.map((t) => ({ title: `${t.name}`, subtitle: `claimed ${t.claimedAt}`, badge: 'claimed', tone: 'muted' })) });
+  }
+  blocks.push({
+    type: 'form',
+    title: 'Set a treasure',
+    tool: 'plugin_fitness_treasure',
+    args: { action: 'add' },
+    button: 'Add treasure',
+    fields: [
+      { name: 'name', label: 'Reward', kind: 'text', maxLength: 60, required: true, placeholder: 'e.g. New running shoes' },
+      { name: 'when', label: 'Earned when I…', kind: 'select', value: 'level', options: TREASURE_WHEN.map((w) => ({ value: w, label: WHEN_LABEL[w] })) },
+      { name: 'value', label: 'Goal', kind: 'text', required: true, placeholder: 'e.g. 10', hint: `Level / days / quests: a number. Rank: D, C, B, A or S. Title: its name, e.g. ${TITLES[4]!.name}.` },
+    ],
+  });
+  if (open.length || ready.length) {
+    blocks.push({
+      type: 'form',
+      title: 'Remove a treasure',
+      tool: 'plugin_fitness_treasure',
+      args: { action: 'remove' },
+      button: 'Remove',
+      fields: [{ name: 'id', label: 'Which one', kind: 'select', options: [...ready, ...open].map((t) => ({ value: String(t.id), label: `${t.name} (${treasureGoal(t)})` })) }],
     });
   }
-  for (const ex of EXERCISES) {
-    if (seen.has(ex.id)) continue;
-    blocks.push(figure(ex, { title: `Mobility · ${ex.name}`, caption: `${ex.min} ${unitOf(ex)}${ex.perSide ? ' per side' : ''}`, collapsed: true }));
+  return blocks;
+}
+
+// ---- 6. Titles ---------------------------------------------------------------------------------
+
+function titleBlocks(state: HunterState, today: string): Block[] {
+  const all = titleStatus(state, today);
+  const earned = all.filter((t) => t.earned);
+  const locked = all.filter((t) => !t.earned);
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Titles' },
+    {
+      type: 'list',
+      items: [
+        ...earned.map((t) => ({ title: t.name, subtitle: `${t.desc} Earned ${t.earned}.`, badge: t.id === state.activeTitle ? 'active' : 'earned', tone: 'ok' })),
+        ...locked.slice(0, 6).map((t) => ({ title: t.name, subtitle: t.desc, badge: `${t.now}/${t.of}`, tone: 'muted' })),
+      ],
+    },
+  ];
+  if (locked.length > 6) blocks.push({ type: 'text', tone: 'muted', text: `${locked.length - 6} more titles wait further down the path.` });
+  if (earned.length >= 2) {
+    blocks.push({
+      type: 'form',
+      title: 'Title shown under your name',
+      tool: 'plugin_fitness_title',
+      button: 'Use this title',
+      fields: [{ name: 'id', label: 'Title', kind: 'select', value: state.activeTitle, options: earned.map((t) => ({ value: t.id, label: t.name })) }],
+    });
   }
+  return blocks;
+}
+
+// ---- 7. Skill Codex ---------------------------------------------------------------------
+
+function codexBlocks(state: HunterState): Block[] {
+  const blocks: Block[] = [
+    { type: 'heading', text: 'Skill Codex' },
+    { type: 'text', tone: 'muted', text: 'Where you stand on every ladder, and the next skill. Open one to see how it moves.' },
+  ];
+  const seen = new Set<string>();
+  for (const l of TRACKED_LADDERS) {
+    const levels = LADDERS[l].levels;
+    const at = state.levels[l];
+    for (const [i, tag] of [[at, '◀ you are here'], [at + 1, 'next']] as const) {
+      const id = levels[i];
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const ex = exercise(id);
+      const feat = featOf(id);
+      blocks.push(figure(ex, {
+        title: `${LADDERS[l].name} ${i + 1}/${levels.length} · ${ex.name} ${tag}`,
+        caption: `${ex.sets} × ${ex.min}–${ex.max} ${unitOf(ex)}${ex.perSide ? ' per side' : ''}${feat ? `\nReal world: ${feat}` : ''}`,
+        collapsed: true,
+      }));
+    }
+  }
+  blocks.push({ type: 'text', tone: 'muted', text: 'Warm-up, mobility and rehab moves show their animation inside the quest.' });
   return blocks;
 }
 
