@@ -13,6 +13,7 @@ import {
   questFor,
   stats,
   streak,
+  TEST_EXERCISE,
   TEST_LABEL,
   xpForLevel,
   type QuestItem,
@@ -137,6 +138,20 @@ export function renderPage(state: HunterState | null, today: string, defaultTime
     });
   }
   if (quest.type === 'gate' && !quest.done) {
+    // Show how each trial is done: same animation, cues and mistake as in training.
+    for (const t of quest.gateTests) {
+      const ex = exercise(TEST_EXERCISE[t]);
+      blocks.push({
+        type: 'figure',
+        svg: figureSvg(ex.id),
+        alt: `${ex.name} — animated demonstration`,
+        title: `Trial · ${TEST_LABEL[t]}`,
+        caption: `One all-out set of ${ex.name} with clean form. Stop when the form breaks and note the ${ex.kind === 'hold' ? 'seconds' : 'reps'}.`,
+        bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
+        size: 'md',
+        collapsed: false,
+      });
+    }
     const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
     if (left.length) {
       blocks.push({

@@ -1667,6 +1667,19 @@ function renderPage(state, today, defaultTimezone) {
     });
   }
   if (quest.type === "gate" && !quest.done) {
+    for (const t of quest.gateTests) {
+      const ex = exercise(TEST_EXERCISE[t]);
+      blocks.push({
+        type: "figure",
+        svg: figureSvg(ex.id),
+        alt: `${ex.name} \u2014 animated demonstration`,
+        title: `Trial \xB7 ${TEST_LABEL[t]}`,
+        caption: `One all-out set of ${ex.name} with clean form. Stop when the form breaks and note the ${ex.kind === "hold" ? "seconds" : "reps"}.`,
+        bullets: [...ex.cues, `Avoid: ${ex.mistake}`],
+        size: "md",
+        collapsed: false
+      });
+    }
     const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
     if (left.length) {
       blocks.push({
