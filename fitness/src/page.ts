@@ -17,7 +17,7 @@ import {
   xpForLevel,
   type QuestItem,
 } from './rules.js';
-import type { HunterState } from './types.js';
+import { GATE_TESTS, type HunterState } from './types.js';
 import { T } from './text.js';
 
 type Block = Record<string, unknown>;
@@ -137,6 +137,14 @@ export function renderPage(state: HunterState | null, today: string, defaultTime
     });
   }
   if (quest.type === 'gate' && !quest.done) {
+    const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
+    if (left.length) {
+      blocks.push({
+        type: 'text',
+        tone: 'warn',
+        text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, '')).join(', ')}. They join a later Gate.`,
+      });
+    }
     blocks.push({
       type: 'form',
       title: 'Gate trials — one all-out set each, strict form, full rest between',
