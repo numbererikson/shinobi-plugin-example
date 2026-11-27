@@ -413,10 +413,11 @@ export default function register(registry) {
 
   async function players() {
     const b = bridge();
-    const since = Math.floor(clock.now().getTime() / 1000) - 2;
+    const since = Math.floor(clock.now().getTime() / 1000) - 5;
     await b.run(['list']);
-    for (let i = 0; i < 6; i++) {
-      await clock.sleep(400);
+    // The server may hand its console output to Docker late; give it time.
+    for (let i = 0; i < 20; i++) {
+      await clock.sleep(500);
       const names = parsePlayerList((await b.logs(since)).lines ?? []);
       if (names) return names;
     }

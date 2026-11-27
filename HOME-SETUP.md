@@ -632,6 +632,8 @@ services:
   minecraft:
     image: itzg/minecraft-bedrock-server
     container_name: minecraft
+    tty: true                 # console output reaches the log at once (the builder reads it)
+    stdin_open: true
     restart: unless-stopped
     network_mode: host
     environment:
