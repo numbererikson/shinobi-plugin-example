@@ -16,8 +16,6 @@ export const T = {
     'The results place you on the ladders and decide your rank.',
   deload: 'Deload week: one set fewer, bottom of the range, no level-ups. Recovery is part of the plan.',
   questDone: '[SYSTEM] Quest complete. Rest well, Hunter.',
-  questDoneShort: '✓ Completed today.',
-  noTower: 'Pull, dip and L-sit ladders unlock fully when you add a power tower in your profile. Until then the System substitutes floor work.',
   notify: {
     questTitle: '[SYSTEM] Daily Quest has arrived',
     recoveryTitle: '[SYSTEM] Recovery Quest has arrived',

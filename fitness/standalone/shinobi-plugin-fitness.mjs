@@ -20,8 +20,6 @@ var HIP_HALF = 7;
 var STEPS = 8;
 var COLOR = {
   body: "#4fd8ff",
-  far: "#2b8cff",
-  head: "#0a1428",
   prop: "#2b5799",
   propFill: "#0d1a33",
   arrow: "#ffcf5c"
@@ -1849,8 +1847,6 @@ var T = {
   gateIntro: "A Gate has opened: a short test. Warm up, then one all-out set of each trial with strict form and full rest between them. The results place you on the ladders and decide your rank.",
   deload: "Deload week: one set fewer, bottom of the range, no level-ups. Recovery is part of the plan.",
   questDone: "[SYSTEM] Quest complete. Rest well, Hunter.",
-  questDoneShort: "\u2713 Completed today.",
-  noTower: "Pull, dip and L-sit ladders unlock fully when you add a power tower in your profile. Until then the System substitutes floor work.",
   notify: {
     questTitle: "[SYSTEM] Daily Quest has arrived",
     recoveryTitle: "[SYSTEM] Recovery Quest has arrived",

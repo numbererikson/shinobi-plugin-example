@@ -100,8 +100,6 @@ const STEPS = 8;
 
 const COLOR = {
   body: '#4fd8ff',
-  far: '#2b8cff',
-  head: '#0a1428',
   prop: '#2b5799',
   propFill: '#0d1a33',
   arrow: '#ffcf5c',
