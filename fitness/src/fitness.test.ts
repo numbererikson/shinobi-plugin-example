@@ -221,6 +221,8 @@ describe('gate safety', () => {
     expect(q.gateTests).toEqual(['hollow_hold']);
     const page = renderPage(s, MONDAY, 'UTC') as { type: string; text?: string }[];
     expect(page.some((b) => b.type === 'text' && /Not tested today/.test(b.text ?? ''))).toBe(true);
+    // Every trial that is tested shows its animation.
+    expect(page.filter((b) => b.type === 'figure' && /^Trial · /.test((b as { title?: string }).title ?? '')).map((b) => (b as { title?: string }).title)).toEqual(['Trial · Hollow hold (seconds)']);
     reportPain(s, MONDAY, 'lower_back', 'both', 3);
     expect(questFor(s, MONDAY).type).toBe('training');
     expect(s.nextGate).toBe(MONDAY);

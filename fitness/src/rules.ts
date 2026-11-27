@@ -228,7 +228,7 @@ export function isDeload(state: HunterState, date: string): boolean {
 }
 
 /** The exercise each Gate trial is: its equipment and the joints it loads. */
-const TEST_EXERCISE: Record<GateTest, string> = {
+export const TEST_EXERCISE: Record<GateTest, string> = {
   pullups: 'pullup',
   pushups: 'pushup',
   dips: 'dip',
