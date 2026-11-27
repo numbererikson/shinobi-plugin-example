@@ -1,10 +1,11 @@
 // Pure rules: no IO, no clock, no randomness. Every function takes the state
 // (and today's local date where it matters) and returns facts or a new state.
 
-import { AREAS, BY_ID, exercise, LADDERS, RECOVERY, TRACKED_LADDERS, WARMUP_A, WARMUP_B, type Area, type Exercise, type LadderId } from './exercises.js';
+import { AREAS, BY_ID, exercise, LADDERS, RECOVERY, REHAB, REHAB_MAX_PAIN, REHAB_NAME, TRACKED_LADDERS, WARMUP_A, WARMUP_B, type Area, type Exercise, type LadderId } from './exercises.js';
 import {
   GATE_TESTS,
   RANKS,
+  type Feel,
   type GateTest,
   type HunterState,
   type Injury,
@@ -16,7 +17,7 @@ import {
   type TrackedLadder,
 } from './types.js';
 
-export const XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500 } as const;
+export const XP = { training: 100, gate: 300, recovery: 30, skill: 150, rank: 500, sideQuest: 20 } as const;
 export const GATE_EVERY_DAYS = 42;
 export const DELOAD_EVERY_WEEKS = 5;
 const MAX_LOGS = 3000;
@@ -74,6 +75,8 @@ export function newHunter(profile: Profile, today: string, baseline: Baseline = 
     nextGate: today,
     notified: {},
   };
+  // Estimates are guesses: place one step below what they suggest. The
+  // Awakening Gate measures for real and only ever raises.
   place(state, {
     pushups: baseline.pushups,
     pullups: baseline.pullups,
@@ -81,7 +84,7 @@ export function newHunter(profile: Profile, today: string, baseline: Baseline = 
     dead_hang: baseline.deadHang,
     hollow_hold: baseline.hollowHold,
     l_sit: baseline.lSit,
-  }, { squats: baseline.squats, wallSit: baseline.wallSit });
+  }, { squats: baseline.squats, wallSit: baseline.wallSit }, 1);
   event(state, today, 'awakening', 'You have been chosen. The System is now active.');
   return state;
 }
@@ -122,13 +125,15 @@ export function placementFor(results: Partial<Record<GateTest, number>>, legs: {
   return out;
 }
 
-function place(state: HunterState, results: Partial<Record<GateTest, number>>, legs: { squats?: number | undefined; wallSit?: number | undefined } = {}): void {
+/** Raise ladders to what the results justify, minus `caution` steps (for estimates). */
+function place(state: HunterState, results: Partial<Record<GateTest, number>>, legs: { squats?: number | undefined; wallSit?: number | undefined } = {}, caution = 0): void {
   const clean: Partial<Record<GateTest, number>> = {};
   for (const t of GATE_TESTS) {
     const v = results[t];
     if (typeof v === 'number' && Number.isFinite(v) && v >= 0) clean[t] = v;
   }
-  for (const [ladder, level] of Object.entries(placementFor(clean, legs)) as [TrackedLadder, number][]) {
+  for (const [ladder, raw] of Object.entries(placementFor(clean, legs)) as [TrackedLadder, number][]) {
+    const level = Math.max(0, raw - caution);
     if (level > state.levels[ladder]) state.levels[ladder] = level;
   }
 }
@@ -166,6 +171,12 @@ export function hasEquipment(ex: Exercise, profile: Profile): boolean {
 
 export function reportPain(state: HunterState, today: string, area: Area, side: Side, pain: number, note?: string): { healed: boolean; injury: Injury | null } {
   const p = Math.max(0, Math.min(10, Math.round(pain)));
+  // Keep every report (one per area/side/day: the latest wins) for the pain chart.
+  const log = (state.painLog ??= []);
+  const same = log.findIndex((e) => e.date === today && e.area === area && e.side === side);
+  if (same >= 0) log.splice(same, 1);
+  log.push({ date: today, area, side, pain: p });
+  if (log.length > MAX_HISTORY) log.splice(0, log.length - MAX_HISTORY);
   const i = state.injuries.findIndex((x) => x.area === area && x.side === side);
   const label = `${side === 'both' ? '' : `${side} `}${area.replace('_', ' ')}`;
   if (p === 0) {
@@ -215,7 +226,32 @@ export interface Quest {
   main: QuestItem[];
   skipped: { ladder: LadderId; reason: string }[];
   gateTests: GateTest[];
+  /** Gentle care for a hurting area, after the main work. */
+  sideQuest: QuestItem[];
+  /** Its name, e.g. "Repair the shoulder"; null when there is none. */
+  sideQuestName: string | null;
   done: boolean;
+}
+
+/** Today's rehab side quest: gentle exercises for every area that hurts 1–6/10. */
+export function sideQuestFor(state: HunterState, exclude: Set<string>): { name: string | null; ids: string[] } {
+  const areas = AREAS.filter((a) => REHAB[a] && state.injuries.some((i) => i.area === a && i.pain >= 1 && i.pain <= REHAB_MAX_PAIN));
+  const ids: string[] = [];
+  for (const a of areas) {
+    for (const id of REHAB[a]!) {
+      if (ids.includes(id) || exclude.has(id)) continue;
+      const ex = exercise(id);
+      if (!hasEquipment(ex, state.profile)) continue;
+      // Light load only, and nothing at all for an area that hurts more than the rehab limit.
+      const ok = AREAS.every((area) => {
+        const pain = worstPain(state.injuries, area);
+        const s = ex.stress[area] ?? 0;
+        return pain === 0 || s === 0 || (s <= 1 && pain <= REHAB_MAX_PAIN);
+      });
+      if (ok) ids.push(id);
+    }
+  }
+  return { name: areas.length ? REHAB_NAME[areas[0]!] + (areas.length > 1 ? ` (+${areas.length - 1})` : '') : null, ids };
 }
 
 export function isTrainingDay(state: HunterState, date: string): boolean {
@@ -254,7 +290,9 @@ function prescribe(ex: Exercise, state: HunterState, deload: boolean): number[] 
   const sets = deload ? Math.max(1, ex.sets - 1) : ex.sets;
   if (deload) return Array.from({ length: sets }, () => ex.min);
   const last = [...state.logs].reverse().find((l) => l.exercise === ex.id);
-  const stepUp = ex.kind === 'hold' ? 5 : 1;
+  // Too easy last time → two steps up; too hard → same target again.
+  const unit = ex.kind === 'hold' ? 5 : 1;
+  const stepUp = last?.feel === 'easy' ? 2 * unit : last?.feel === 'hard' ? 0 : unit;
   return Array.from({ length: sets }, (_, i) => {
     const prev = last?.sets[i] ?? last?.sets[last.sets.length - 1];
     if (prev === undefined) return ex.min;
@@ -329,10 +367,17 @@ export function questFor(state: HunterState, date: string): Quest {
   // A Gate with no trial possible today (injuries, equipment) waits: train instead.
   const gateDue = training && date >= state.nextGate && gateTestsFor(state).length > 0;
   const type: QuestType = record?.type ?? (gateDue ? 'gate' : training ? 'training' : 'recovery');
-  const quest: Quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], done: !!record };
+  const quest: Quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], sideQuest: [], sideQuestName: null, done: !!record };
+  const addSideQuest = (): void => {
+    const used = new Set([...quest.warmup, ...quest.main].map((q) => q.exercise));
+    const sq = sideQuestFor(state, used);
+    quest.sideQuestName = sq.ids.length ? sq.name : null;
+    quest.sideQuest = sq.ids.map((id) => item(exercise(id), state, false, date));
+  };
 
   if (type === 'recovery') {
     quest.main = RECOVERY.filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
+    addSideQuest();
     return quest;
   }
   if (type === 'gate') {
@@ -364,6 +409,7 @@ export function questFor(state: HunterState, date: string): Quest {
     if (p.note) q.note = p.note;
     quest.main.push(q);
   }
+  addSideQuest();
   return quest;
 }
 
@@ -377,11 +423,11 @@ export interface LogResult {
   hitTop: boolean;
 }
 
-export function logSets(state: HunterState, date: string, exerciseId: string, rawSets: number[]): LogResult {
+export function logSets(state: HunterState, date: string, exerciseId: string, rawSets: number[], feel?: Feel): LogResult {
   const ex = exercise(exerciseId);
   const sets = rawSets.map((n) => Math.max(0, Math.round(n))).slice(0, 10);
   if (sets.length === 0) throw new Error('log at least one set');
-  state.logs.push({ date, exercise: ex.id, sets });
+  state.logs.push(feel ? { date, exercise: ex.id, sets, feel } : { date, exercise: ex.id, sets });
   if (state.logs.length > MAX_LOGS) state.logs.splice(0, state.logs.length - MAX_LOGS);
 
   const deload = isDeload(state, date);
@@ -424,7 +470,7 @@ export function xpForLevel(level: number): number {
   return 50 * level * (level - 1);
 }
 
-function addXp(state: HunterState, date: string, amount: number): void {
+export function addXp(state: HunterState, date: string, amount: number): void {
   const before = hunterLevel(state.xp);
   state.xp += amount;
   const after = hunterLevel(state.xp);

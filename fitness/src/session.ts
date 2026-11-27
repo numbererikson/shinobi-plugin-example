@@ -3,20 +3,35 @@
 // Pure functions over the state; `now` is passed in.
 
 import { exercise } from './exercises.js';
-import { clearGate, completeQuest, hunterLevel, logSets, questFor, TEST_EXERCISE, type QuestItem } from './rules.js';
-import type { ActiveSession, GateTest, HunterState, SessionStep, SessionSummary } from './types.js';
+import { addXp, clearGate, completeQuest, event, hunterLevel, logSets, questFor, TEST_EXERCISE, XP, type QuestItem } from './rules.js';
+import type { ActiveSession, Feel, GateTest, HunterState, SessionStep, SessionSummary, Sleep, Soreness } from './types.js';
 
 /** Rest after a Gate trial: full recovery before the next all-out set. */
 const TRIAL_REST = 120;
 
-const stepOf = (q: QuestItem, kind: SessionStep['kind']): SessionStep => {
+export interface Readiness {
+  sleep?: Sleep;
+  soreness?: Soreness;
+}
+
+/** Why today should be lighter, or null when the hunter is ready. */
+export function lightReason(r: Readiness): string | null {
+  const why: string[] = [];
+  if (r.sleep === 'poor') why.push('poor sleep');
+  if (r.soreness === 'heavy') why.push('heavy soreness');
+  return why.length ? why.join(' and ') : null;
+}
+
+const stepOf = (q: QuestItem, kind: SessionStep['kind'], light: boolean): SessionStep => {
+  const work = kind === 'work';
+  const sets = work ? (light ? Math.max(1, q.sets - 1) : q.sets) : 1;
   const s: SessionStep = {
     kind,
     exercise: q.exercise,
-    sets: kind === 'work' ? q.sets : 1,
-    target: kind === 'work' ? q.target : [q.target[0] ?? q.min],
+    sets,
+    target: work ? (light ? Array.from({ length: sets }, () => q.min) : q.target) : [q.target[0] ?? q.min],
     done: [],
-    restSec: kind === 'work' ? q.restSec : 0,
+    restSec: work ? q.restSec : 0,
   };
   if (q.ladder) s.ladder = q.ladder;
   if (q.note) s.note = q.note;
@@ -24,25 +39,30 @@ const stepOf = (q: QuestItem, kind: SessionStep['kind']): SessionStep => {
 };
 
 /** Start (or resume) today's guided quest. */
-export function startSession(state: HunterState, date: string, now: Date): ActiveSession {
+export function startSession(state: HunterState, date: string, now: Date, readiness: Readiness = {}): ActiveSession {
   const a = state.active;
   if (a && a.date === date) {
-    if (a.finished) throw new Error("Today's quest is already finished.");
-    return a;
+    if (a.finished && a.finished.outcome !== 'abandoned') throw new Error("Today's quest is already finished.");
+    if (!a.finished) return a;
   }
   const quest = questFor(state, date);
   if (quest.done) throw new Error("Today's quest is already complete.");
-  const steps: SessionStep[] = quest.warmup.map((w) => stepOf(w, 'warmup'));
+  // Readiness only lightens training: a Gate is a test, recovery is light already.
+  const light = quest.type === 'training' ? lightReason(readiness) : null;
+  const steps: SessionStep[] = quest.warmup.map((w) => stepOf(w, 'warmup', false));
   if (quest.type === 'gate') {
     for (const t of quest.gateTests) {
       steps.push({ kind: 'trial', exercise: TEST_EXERCISE[t], test: t, sets: 1, target: [], done: [], restSec: TRIAL_REST });
     }
   } else {
-    for (const m of quest.main) steps.push(stepOf(m, quest.type === 'recovery' ? 'recovery' : 'work'));
+    for (const m of quest.main) steps.push(stepOf(m, quest.type === 'recovery' ? 'recovery' : 'work', !!light));
+    for (const r of quest.sideQuest) steps.push(stepOf(r, 'rehab', false));
   }
   if (steps.length === 0) throw new Error('Nothing to do today with the current equipment and injuries.');
   const session: ActiveSession = { date, type: quest.type, steps, cursor: 0, startedAt: now.toISOString() };
   if (quest.session) session.session = quest.session;
+  if (light) session.light = light;
+  if (quest.type !== 'gate' && quest.sideQuest.length && quest.sideQuestName) session.sideQuest = quest.sideQuestName;
   state.active = session;
   return session;
 }
@@ -82,11 +102,12 @@ function advance(state: HunterState, a: ActiveSession, date: string, now: Date, 
   startRest(a, now, rest);
 }
 
-/** Record one set (reps or seconds) of the current step. */
-export function recordSet(state: HunterState, date: string, now: Date, value: number): ActiveSession {
+/** Record one set (reps or seconds) of the current step; `feel` rates the exercise (last set). */
+export function recordSet(state: HunterState, date: string, now: Date, value: number, feel?: Feel): ActiveSession {
   const a = running(state, date);
   const step = a.steps[a.cursor]!;
   step.done.push(Math.max(0, Math.round(value)));
+  if (feel && step.kind === 'work') step.feel = feel;
   if (step.done.length < step.sets) startRest(a, now, step.restSec);
   else advance(state, a, date, now, step.restSec);
   return a;
@@ -147,14 +168,23 @@ function finish(state: HunterState, a: ActiveSession, date: string, now: Date): 
   } else {
     const work = a.steps.filter((s) => s.kind === 'work' && s.done.length > 0);
     for (const s of work) {
-      const r = logSets(state, date, s.exercise, s.done);
+      const r = logSets(state, date, s.exercise, s.done, s.feel);
       summary.logged.push({ exercise: s.exercise, sets: s.done });
       summary.unlocked.push(...r.unlocked.map((u) => exercise(u.to).name));
       summary.recalibrated.push(...r.recalibrated.map((u) => exercise(u.to).name));
     }
-    const didSomething = a.type === 'recovery' ? a.steps.some((s) => s.done.length > 0) : work.length > 0;
-    if (didSomething) completeQuest(state, date);
-    else summary.outcome = 'abandoned';
+    const rehabDone = a.steps.some((s) => s.kind === 'rehab' && s.done.length > 0);
+    const didSomething = a.type === 'recovery' ? a.steps.some((s) => s.kind === 'recovery' && s.done.length > 0) || rehabDone : work.length > 0;
+    if (didSomething) {
+      completeQuest(state, date);
+      if (rehabDone && a.sideQuest) {
+        event(state, date, 'quest_complete', `Side quest complete: ${a.sideQuest}. (+${XP.sideQuest} XP)`);
+        addXp(state, date, XP.sideQuest);
+        summary.sideQuest = a.sideQuest;
+      }
+    } else {
+      summary.outcome = 'abandoned';
+    }
   }
 
   summary.xp = state.xp - xpBefore;
