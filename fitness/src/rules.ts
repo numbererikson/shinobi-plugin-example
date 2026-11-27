@@ -227,8 +227,27 @@ export function isDeload(state: HunterState, date: string): boolean {
   return (week + 1) % DELOAD_EVERY_WEEKS === 0;
 }
 
-export function gateTestsFor(profile: Profile): GateTest[] {
-  return profile.equipment.tower ? [...GATE_TESTS] : ['pushups', 'hollow_hold'];
+/** The exercise each Gate trial is: its equipment and the joints it loads. */
+const TEST_EXERCISE: Record<GateTest, string> = {
+  pullups: 'pullup',
+  pushups: 'pushup',
+  dips: 'dip',
+  dead_hang: 'dead_hang',
+  hollow_hold: 'hollow_hold',
+  l_sit: 'l_sit',
+};
+
+/**
+ * Trials for today's Gate. A trial is an all-out set, so it is left out when
+ * the equipment is missing or it loads any area that hurts at 3/10 or more —
+ * that ladder is tested at a later Gate, once the area has settled.
+ */
+export function gateTestsFor(state: Pick<HunterState, 'profile' | 'injuries'>): GateTest[] {
+  return GATE_TESTS.filter((t) => {
+    const ex = exercise(TEST_EXERCISE[t]);
+    if (!hasEquipment(ex, state.profile)) return false;
+    return !AREAS.some((area) => (ex.stress[area] ?? 0) > 0 && worstPain(state.injuries, area) > 2);
+  });
 }
 
 function prescribe(ex: Exercise, state: HunterState, deload: boolean): number[] {
@@ -307,7 +326,8 @@ export function questFor(state: HunterState, date: string): Quest {
   const record = state.quests.find((q) => q.date === date);
   const deload = isDeload(state, date);
   const training = isTrainingDay(state, date);
-  const gateDue = training && date >= state.nextGate;
+  // A Gate with no trial possible today (injuries, equipment) waits: train instead.
+  const gateDue = training && date >= state.nextGate && gateTestsFor(state).length > 0;
   const type: QuestType = record?.type ?? (gateDue ? 'gate' : training ? 'training' : 'recovery');
   const quest: Quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], done: !!record };
 
@@ -317,7 +337,7 @@ export function questFor(state: HunterState, date: string): Quest {
   }
   if (type === 'gate') {
     quest.warmup = [...WARMUP_A, ...WARMUP_B].filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
-    quest.gateTests = gateTestsFor(state.profile);
+    quest.gateTests = gateTestsFor(state);
     return quest;
   }
   const done = state.quests.filter((q) => q.type === 'training' && q.date < date).length;

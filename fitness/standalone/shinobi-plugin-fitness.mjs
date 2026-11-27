@@ -1200,8 +1200,20 @@ function isDeload(state, date) {
   const week = Math.floor(Math.max(0, daysBetween(state.startDate, date)) / 7);
   return (week + 1) % DELOAD_EVERY_WEEKS === 0;
 }
-function gateTestsFor(profile) {
-  return profile.equipment.tower ? [...GATE_TESTS] : ["pushups", "hollow_hold"];
+var TEST_EXERCISE = {
+  pullups: "pullup",
+  pushups: "pushup",
+  dips: "dip",
+  dead_hang: "dead_hang",
+  hollow_hold: "hollow_hold",
+  l_sit: "l_sit"
+};
+function gateTestsFor(state) {
+  return GATE_TESTS.filter((t) => {
+    const ex = exercise(TEST_EXERCISE[t]);
+    if (!hasEquipment(ex, state.profile)) return false;
+    return !AREAS.some((area) => (ex.stress[area] ?? 0) > 0 && worstPain(state.injuries, area) > 2);
+  });
 }
 function prescribe(ex, state, deload) {
   const sets = deload ? Math.max(1, ex.sets - 1) : ex.sets;
@@ -1273,7 +1285,7 @@ function questFor(state, date) {
   const record = state.quests.find((q) => q.date === date);
   const deload = isDeload(state, date);
   const training = isTrainingDay(state, date);
-  const gateDue = training && date >= state.nextGate;
+  const gateDue = training && date >= state.nextGate && gateTestsFor(state).length > 0;
   const type = record?.type ?? (gateDue ? "gate" : training ? "training" : "recovery");
   const quest = { date, type, deload, warmup: [], main: [], skipped: [], gateTests: [], done: !!record };
   if (type === "recovery") {
@@ -1282,7 +1294,7 @@ function questFor(state, date) {
   }
   if (type === "gate") {
     quest.warmup = [...WARMUP_A, ...WARMUP_B].filter((id) => usable(state, id)).map((id) => item(exercise(id), state, false, date));
-    quest.gateTests = gateTestsFor(state.profile);
+    quest.gateTests = gateTestsFor(state);
     return quest;
   }
   const done = state.quests.filter((q) => q.type === "training" && q.date < date).length;
@@ -1655,6 +1667,14 @@ function renderPage(state, today, defaultTimezone) {
     });
   }
   if (quest.type === "gate" && !quest.done) {
+    const left = GATE_TESTS.filter((t) => !quest.gateTests.includes(t));
+    if (left.length) {
+      blocks.push({
+        type: "text",
+        tone: "warn",
+        text: `Not tested today (missing equipment or an area that hurts 3/10+): ${left.map((t) => TEST_LABEL[t].replace(/ \(.*\)$/, "")).join(", ")}. They join a later Gate.`
+      });
+    }
     blocks.push({
       type: "form",
       title: "Gate trials \u2014 one all-out set each, strict form, full rest between",

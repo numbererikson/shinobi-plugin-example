@@ -209,6 +209,29 @@ describe('XP, streak and gates', () => {
   });
 });
 
+describe('gate safety', () => {
+  it('leaves out all-out trials that load a painful area, and postpones a Gate with no trial left', () => {
+    const s = newHunter(profile(), MONDAY);
+    expect(questFor(s, MONDAY).gateTests).toEqual(['pullups', 'pushups', 'dips', 'dead_hang', 'hollow_hold', 'l_sit']);
+    reportPain(s, MONDAY, 'shoulder', 'right', 2);
+    expect(questFor(s, MONDAY).gateTests).toHaveLength(6);
+    reportPain(s, MONDAY, 'shoulder', 'right', 4);
+    const q = questFor(s, MONDAY);
+    expect(q.type).toBe('gate');
+    expect(q.gateTests).toEqual(['hollow_hold']);
+    const page = renderPage(s, MONDAY, 'UTC') as { type: string; text?: string }[];
+    expect(page.some((b) => b.type === 'text' && /Not tested today/.test(b.text ?? ''))).toBe(true);
+    reportPain(s, MONDAY, 'lower_back', 'both', 3);
+    expect(questFor(s, MONDAY).type).toBe('training');
+    expect(s.nextGate).toBe(MONDAY);
+  });
+
+  it('without a tower the Gate tests push-ups and the hollow hold only', () => {
+    const s = newHunter(profile({ equipment: { tower: false, chair: true } }), MONDAY);
+    expect(questFor(s, MONDAY).gateTests).toEqual(['pushups', 'hollow_hold']);
+  });
+});
+
 describe('profile', () => {
   it('keeps a history, logs body weight, and a new tower opens a Gate', () => {
     const s = newHunter(profile({ equipment: { tower: false, chair: true }, weightKg: 75 }), MONDAY);
