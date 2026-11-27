@@ -5,8 +5,9 @@ the Claude app talks to from anywhere:
 
 - **Shinobi**: the shared MCP brain (projects, decisions, notes), reachable
   at `https://shinobi.<your-domain>/mcp` through a Cloudflare Tunnel, no open ports.
-- **Fitness plugin**: a training assistant ("what do I train today", log a
-  workout, weight, pain).
+- **Fitness plugin ("The System")**: a bodyweight strength trainer ("what do
+  I train today", log sets, weight, pain) with a Daily Quest push and animated
+  exercise demos on the dashboard.
 - **Music plugin**: "play rock", "play Led Zeppelin", "next", "this one
   annoys me", playing through the laptop's headphone jack into a home
   theater's AUX input, or as a stream to a phone on the home Wi-Fi.

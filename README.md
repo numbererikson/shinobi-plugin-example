@@ -20,7 +20,7 @@ Shinobi's dashboard (Plugins → Catalog) installs them with one click from [`ca
 | Plugin | Path | What it shows |
 | --- | --- | --- |
 | `shinobi-plugin-example` | root (`index.mjs`) | Minimal read-only plugin — one tool over the read-only `ShinobiApi`. |
-| `shinobi-plugin-fitness` | [`fitness/`](fitness/) | Stateful reference plugin — 7 tools over the writable `registry.state` store, in TypeScript with a build + tests. |
+| `shinobi-plugin-fitness` | [`fitness/`](fitness/) | "The System": bodyweight strength trainer — 10 tools over `registry.state`, a themed dashboard page with animated SVG figures and forms, schedules, pushes and a brief section. TypeScript with tests, bundled to one file with esbuild. |
 | `shinobi-plugin-music` | [`music/`](music/) | Single-file, zero-dependency plugin — 9 tools that drive a local MPD player (play by artist/song/genre, skip, volume, library, ban list, speaker or phone stream). |
 | `shinobi-plugin-adguard` | [`adguard/`](adguard/) | Single-file, zero-dependency plugin — 9 tools over AdGuard Home's REST API (per-device service blocks with timed undo, weekly windows, device groups, activity, site rules, pause). |
 | `shinobi-plugin-remember` | [`remember/`](remember/) | Single-file, zero-dependency plugin — 10 tools for encrypted personal memory and reminders, using `registry.schedule` (fires every minute) and `registry.notify` (push with Done/Snooze buttons). Needs Shinobi 0.7.0+. |

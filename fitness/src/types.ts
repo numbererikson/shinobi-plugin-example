@@ -1,294 +1,147 @@
-// Types for the fitness plugin. Mirrors SPEC_shinobi_plugin_fitness v0.2.0.
-// The plugin stores and returns structured facts only — never natural language
-// coaching; the LLM turns these into words.
+// Host contract (declared locally so the package never imports Shinobi
+// internals) and the plugin's persisted state.
 
-export type Goal = 'visible_abs' | 'general_fitness' | 'custom';
+import type { Area, LadderId } from './exercises.js';
 
-export type Experience =
-  | 'beginner'
-  | 'returning_after_long_break'
-  | 'physical_worker_returning'
-  | 'intermediate'
-  | 'advanced';
+// ---- host contract --------------------------------------------------------
 
-export interface FitnessProfile {
-  age?: number;
-  heightCm?: number;
-  weightKg?: number;
-  experience?: Experience;
-  notes?: string;
-}
-
-export interface HabitState {
-  smokeFreeSince?: string;
-  alcoholFreeSince?: string;
-}
-
-export type EquipmentLevel =
-  | 'none'
-  | 'bodyweight'
-  | 'bands'
-  | 'bench'
-  | 'dumbbells'
-  | 'bench_dumbbells'
-  | 'pullup_bar'
-  | 'pullup_bar_bench_dumbbells'
-  | 'home_gym';
-
-export interface EquipmentState {
-  level: EquipmentLevel;
-  items?: string[];
-}
-
-export type Side = 'left' | 'right' | 'both';
-export type PainArea = 'shoulder' | 'knee' | 'back' | 'other';
-
-export interface JointRestriction {
-  side?: Side;
-  status: 'watch' | 'avoid' | 'cleared';
-  lastPain?: number; // 0-10
-  notes?: string;
-}
-
-export interface TemporaryRestriction {
-  id: string;
-  reason: string;
-  activeUntil?: string;
-  severity: 'low' | 'medium' | 'high';
-}
-
-export interface RestrictionState {
-  shoulder?: JointRestriction;
-  knee?: JointRestriction;
-  back?: JointRestriction;
-  temporary?: TemporaryRestriction[];
-}
-
-export type PhaseNumber = 1 | 2 | 3 | 4;
-export type PhaseName = 'foundation' | 'base_strength' | 'progressive_strength' | 'definition';
-
-export interface TrainingPhase {
-  number: PhaseNumber;
-  name: PhaseName;
-  startedAt: string;
-}
-
-export interface PainReport {
-  area: PainArea;
-  side?: Side;
-  value: number;
-}
-
-export interface WorkoutLog {
-  id: string;
-  date: string;
-  workoutId: string;
-  completed: boolean;
-  durationMinutes?: number;
-  difficulty?: number; // 1-10
-  pain?: PainReport[];
-  notes?: string;
-}
-
-export interface PainLog {
-  date: string;
-  area: PainArea;
-  side?: Side;
-  value: number; // 0-10
-  trigger?: string;
-  notes?: string;
-}
-
-export interface WeightLog {
-  date: string;
-  weightKg: number;
-  waistCm?: number;
-}
-
-// Stable, machine-readable restriction codes. The LLM maps these to language.
-// Add new codes rather than repurposing existing ones once shipped.
-export type RestrictionMessageCode =
-  | 'NO_HEAVY_OVERHEAD_PRESSING'
-  | 'REDUCE_PUSH_VOLUME'
-  | 'NO_DIPS'
-  | 'SHOULDER_PAIN_HIGH'
-  | 'KNEE_PAIN_HIGH'
-  | 'BACK_PAIN_HIGH';
-
-export interface TodayRestriction {
-  area: PainArea;
-  side?: Side;
-  level: 'watch' | 'caution' | 'avoid';
-  messageCode: RestrictionMessageCode;
-}
-
-export interface FitnessMission {
-  id: string;
-  type: 'fitness_180';
-  status: 'active' | 'paused' | 'completed' | 'archived';
-  createdAt: string;
-  startedAt: string;
-  targetDays: number;
-  goal: Goal;
-  profile: FitnessProfile;
-  habits: HabitState;
-  equipment: EquipmentState;
-  restrictions: RestrictionState;
-  phase: TrainingPhase;
-  history: WorkoutLog[];
-  weightHistory: WeightLog[];
-  painHistory: PainLog[];
-}
-
-export interface FitnessPluginState {
-  version: 1;
-  missions: FitnessMission[];
-  activeMissionId?: string;
-}
-
-// ---- Tool I/O ---------------------------------------------------------------
-
-export interface CreateFitnessInput {
-  goal?: Goal;
-  targetDays?: number;
-  profile?: Partial<FitnessProfile>;
-  smokeFreeSince?: string;
-  alcoholFreeSince?: string;
-  equipment?: Partial<EquipmentState>;
-  restrictions?: Partial<RestrictionState>;
-}
-
-export interface CreateFitnessOutput {
-  mission: FitnessMission;
-  created: boolean;
-}
-
-export interface TodayOutput {
-  exists: boolean;
-  requiredAction?: 'create_mission';
-  missionId?: string;
-  day?: number;
-  phase?: TrainingPhase;
-  workoutId?: string;
-  restrictions?: TodayRestriction[];
-  streaks?: {
-    smokeFreeDays?: number;
-    alcoholFreeDays?: number;
-    workoutStreakDays?: number;
-  };
-  rules?: {
-    trainToFailure: false;
-    repsInReserve: number;
-    maxPainAllowed: number;
-  };
-}
-
-export interface LogWorkoutInput {
-  date?: string;
-  workoutId: string;
-  completed: boolean;
-  durationMinutes?: number;
-  difficulty?: number;
-  pain?: PainReport[];
-  notes?: string;
-}
-
-export interface LogWorkoutOutput {
-  stored: boolean;
-  updatedRestrictions: RestrictionState;
-  nextSuggestedWorkoutId?: string;
-}
-
-export interface LogPainInput {
-  date?: string;
-  area: PainArea;
-  side?: Side;
-  value: number;
-  trigger?: string;
-  notes?: string;
-}
-
-export interface LogPainOutput {
-  stored: boolean;
-  restrictionLevel: 'normal' | 'caution' | 'avoid';
-  updatedRestrictions: RestrictionState;
-}
-
-export interface LogWeightInput {
-  date?: string;
-  weightKg: number;
-  waistCm?: number;
-}
-
-export interface LogWeightOutput {
-  stored: boolean;
-  latestWeightKg: number;
-  deltaFromStartKg?: number;
-}
-
-export interface SetEquipmentInput {
-  level: EquipmentLevel;
-  items?: string[];
-}
-
-export interface SetEquipmentOutput {
-  stored: boolean;
-  equipment: EquipmentState;
-  enabledWorkoutFamilies: string[];
-}
-
-export interface FitnessSummary {
-  day: number;
-  phase: PhaseName;
-  workoutsCompleted: number;
-  workoutsLast14Days: number;
-  smokeFreeDays?: number;
-  alcoholFreeDays?: number;
-  latestWeightKg?: number;
-  deltaFromStartKg?: number;
-  activeRestrictions: TodayRestriction[];
-}
-
-export interface StatusOutput {
-  exists: boolean;
-  requiredAction?: 'create_mission';
-  mission?: FitnessMission;
-  summary?: FitnessSummary;
-}
-
-// ---- Plugin contract (local copy, not imported from the host) ---------------
-//
-// A Shinobi plugin's default export is `register(registry, api)`. This package
-// depends only on the *shape* of that contract — declared here as local
-// interfaces — so it never imports Shinobi internals. The host supplies the
-// concrete, SQLite-backed implementation at load time.
-
-/**
- * Writable, per-plugin state store. Scoped to this plugin's namespace by the
- * host, so one plugin cannot read or clobber another's keys. Values are
- * JSON-serialized by the store.
- */
 export interface PluginStateStore {
   get<T>(key: string): T | null;
   set(key: string, value: unknown): void;
   delete(key: string): void;
-  /**
-   * Atomic read-modify-write: applies `mutator` to the current value (or
-   * `null` when absent), persists the result, and returns it.
-   */
   update<T>(key: string, mutator: (current: T | null) => T): T;
 }
 
-/** A single tool registration. Tool names MUST match /^plugin_[a-z][a-z0-9_]*$/. */
 export interface PluginToolDef {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
-  handler: (args: Record<string, any>) => unknown | Promise<unknown>;
+  inputSchema: object;
+  handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
 }
 
-/** The registry handed to `register()`; carries tool registration + state. */
 export interface PluginRegistry {
   registerTool(def: PluginToolDef): void;
   state: PluginStateStore;
+  registerPage?(def: { id: string; title: string; icon?: string; order?: number; theme?: string; render: () => unknown }): void;
+  schedule?(def: { id: string; cron: string; timezone?: string; run: () => unknown | Promise<unknown> }): void;
+  notify?(n: { title: string; body: string; url?: string; tag?: string; actions?: { label: string; tool: string; args?: Record<string, unknown> }[] }): Promise<unknown>;
+  brief?(def: { id: string; order?: number; render: () => unknown }): void;
 }
+
+// ---- state ----------------------------------------------------------------
+
+export type Rank = 'E' | 'D' | 'C' | 'B' | 'A' | 'S';
+export const RANKS: Rank[] = ['E', 'D', 'C', 'B', 'A', 'S'];
+
+export type Side = 'left' | 'right' | 'both';
+
+export type GateTest = 'pullups' | 'pushups' | 'dips' | 'dead_hang' | 'hollow_hold' | 'l_sit';
+export const GATE_TESTS: GateTest[] = ['pullups', 'pushups', 'dips', 'dead_hang', 'hollow_hold', 'l_sit'];
+
+export type TrackedLadder = Exclude<LadderId, 'pull_floor'>;
+
+export interface Profile {
+  name?: string;
+  age?: number;
+  heightCm?: number;
+  weightKg?: number;
+  /** Local weekdays with a training quest, 0 = Sunday … 6 = Saturday. */
+  trainingDays: number[];
+  /** Local time of the Daily Quest push, "HH:MM". */
+  questTime: string;
+  /** Push a warning in the evening when the quest is still open. */
+  eveningWarning: boolean;
+  timezone: string;
+  equipment: { tower: boolean; chair: boolean };
+}
+
+export interface Injury {
+  area: Area;
+  side: Side;
+  /** 0–10. */
+  pain: number;
+  since: string;
+  updatedAt: string;
+  note?: string;
+}
+
+export interface ExerciseLog {
+  date: string;
+  exercise: string;
+  /** Reps (or seconds for holds) per set. */
+  sets: number[];
+}
+
+export type QuestType = 'training' | 'recovery' | 'gate';
+
+export interface QuestRecord {
+  date: string;
+  type: QuestType;
+  session?: 'A' | 'B';
+  xp: number;
+}
+
+export interface BodyEntry {
+  date: string;
+  weightKg?: number;
+  waistCm?: number;
+}
+
+export interface GateResult {
+  date: string;
+  number: number;
+  results: Partial<Record<GateTest, number>>;
+  rankBefore: Rank;
+  rankAfter: Rank;
+}
+
+export type EventKind =
+  | 'awakening'
+  | 'quest_complete'
+  | 'level_up'
+  | 'skill_unlocked'
+  | 'recalibration'
+  | 'gate_cleared'
+  | 'rank_up'
+  | 'injury'
+  | 'recovered'
+  | 'equipment'
+  | 'profile';
+
+export interface SystemEvent {
+  date: string;
+  kind: EventKind;
+  text: string;
+}
+
+export interface ProfileChange {
+  date: string;
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+export interface HunterState {
+  version: 2;
+  startDate: string;
+  profile: Profile;
+  levels: Record<TrackedLadder, number>;
+  /** Consecutive sessions at the top / bottom of the range, per exercise. */
+  streaks: Record<string, { top: number; low: number }>;
+  injuries: Injury[];
+  logs: ExerciseLog[];
+  quests: QuestRecord[];
+  body: BodyEntry[];
+  gates: GateResult[];
+  events: SystemEvent[];
+  profileHistory: ProfileChange[];
+  best: Partial<Record<GateTest, number>>;
+  xp: number;
+  rank: Rank;
+  /** First day a Gate (test) is due. */
+  nextGate: string;
+  /** Local dates the quest / evening warning were pushed. */
+  notified: { quest?: string; warning?: string };
+}
+
+export const STATE_KEY = 'hunter';

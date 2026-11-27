@@ -20,8 +20,8 @@
     },
     {
       "id": "fitness",
-      "name": "Fitness",
-      "description": "A 180-day training mission: today's workout, pain-aware restrictions, weight and habit streaks.",
+      "name": "The System (Fitness)",
+      "description": "Bodyweight strength as a hunter RPG: Daily Quests, ranks E→S at Gates, skill ladders, animated exercise demos, pain-aware swaps. Power tower optional. Needs Shinobi 0.13+ for the full page.",
       "url": "https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs"
     },
     {

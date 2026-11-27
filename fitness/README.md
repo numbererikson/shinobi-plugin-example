@@ -1,172 +1,120 @@
-# shinobi-plugin-fitness
+# shinobi-plugin-fitness — The System
 
-A standalone, publishable Shinobi plugin that demonstrates **long-term adaptive
-mission state**. It is the reference implementation for Shinobi's writable,
-per-plugin state store (`registry.state`).
+A bodyweight strength trainer for [Shinobi](https://github.com/numbererikson/shinobi),
+dressed as a hunter-RPG "System": a **Daily Quest** every day, **ranks E → S**
+earned at **Gates** (test days), stats, level-ups and skill unlocks.
 
-The point is not to be a fitness app. It is to show that Shinobi can persist
-structured state across time while an LLM reasons over that state and adapts
-recommendations. The first mission is: *get visible abs in 180 days while
-staying smoke-free and alcohol-free.*
+The goal is strength you can carry anywhere at a normal body weight — pull,
+push, legs and core — not bodybuilding. No heavy loads and no training to
+failure: every movement climbs a **ladder** from easy to elite (dead hang →
+pull-up → archer pull-up, wall push-up → pseudo planche push-up, squat →
+pistol squat…), and you climb it when you own the current step.
 
-The package depends only on the plugin **contract** (declared locally in
-[`src/types.ts`](src/types.ts)), never on Shinobi internals — the host supplies
-the concrete, SQLite-backed state store at load time.
+Works with a power tower (pull-up bar + dip handles) or with just the floor,
+a wall and a chair.
 
-## Division of labour
+## What you get
 
-- **Shinobi owns truth** — durable state in SQLite via `registry.state`.
-- **The plugin owns state** — it returns structured facts, restrictions,
-  message codes, IDs and snapshots. It never returns coaching, motivation, or
-  exercise explanations.
-- **The LLM owns language** — it maps workout IDs and message codes to words.
+- **Daily Quest.** Training days alternate session A (pull, push, legs, core)
+  and B (pull, dip, hinge, L-sit, legs) of about 40 minutes with a short
+  warm-up; other days are a 10-minute recovery quest (mobility). Every fifth
+  week is a deload.
+- **Ladders and double progression.** Each exercise has a range (e.g. 3 × 3–8).
+  Today's target is one rep more than last time; hit the top of the range in
+  two sessions and the next skill unlocks. Fall clearly short twice and the
+  System recalibrates one step down.
+- **Injury-aware.** Report pain 0–10 per area (shoulder, elbow, wrist, lower
+  back, hip, knee, ankle). 1–2: train below pain; 3–4: only light work for that
+  area; 5+: the area rests. Exercises are swapped automatically for easier ones
+  on the same ladder or a floor alternative, and the quest says why.
+- **Gates every 6 weeks** (and when you add a power tower): one all-out set of
+  pull-ups, push-ups, dips, dead hang, hollow hold and L-sit. Results place you
+  on the ladders and decide your rank. The first training day is the
+  Awakening Gate.
+- **Status Window**: rank, level/XP, STR · AGI · VIT · END, streak, active
+  status effects, what the next rank needs.
+- **Animated figures.** Every exercise has a looping stick-figure animation
+  plus three plain cues and the most common mistake — no video searching.
+- **Dashboard page** (*Apps → The System*, right after Music) in the
+  `hologram` theme: status, today's quest with a log form per exercise, skill
+  ladders, history charts (reps per week, weight), Gate results, the System
+  log, and forms for the profile and pain.
+- **Pushes**: the Daily Quest at your chosen time, an optional 19:30 warning
+  if it is still open (recovery quests get a *Done* button), and a line in
+  Shinobi's morning brief.
+
+Nutrition and habit tracking are deliberately out of scope.
 
 ## Install
 
-This package is loaded by Shinobi's plugin discovery, which scans `node_modules`
-for packages named `@shinobi/plugin-*` or `shinobi-plugin-*` and imports the
-package `exports`/`main` entry.
+From the Shinobi dashboard: **Plugins → Catalog → Fitness → Install →
+Restart now**. Or drop the single-file bundle into the plugins folder:
 
 ```bash
-npm install shinobi-plugin-fitness
-```
-
-The default export is `register(registry, api)`. Shinobi calls it with a
-`registry` that provides `registerTool(...)` and a scoped, writable `state`
-store.
-
-> **Requires** a Shinobi host that exposes `registry.state` (the writable
-> per-plugin state store). On older hosts the tools register but every call
-> fails because `registry.state` is undefined.
-
-### Quick install on a server (single file, no npm)
-
-For a self-hosted Shinobi (e.g. on a VM), the simplest path is the prebuilt
-single-file bundle in [`standalone/`](standalone/). Shinobi's discovery loads
-any `.mjs`/`.js` file in `~/.shinobi/plugins/` directly:
-
-```bash
-# on the Shinobi host
-mkdir -p ~/.shinobi/plugins
 curl -fsSL -o ~/.shinobi/plugins/shinobi-plugin-fitness.mjs \
   https://raw.githubusercontent.com/numbererikson/shinobi-plugin-example/main/fitness/standalone/shinobi-plugin-fitness.mjs
-# then restart Shinobi — the 7 plugin_fitness_* tools load at startup
 ```
 
-Regenerate the bundle after changing sources with `npm run bundle`.
+Needs Shinobi **0.13+** for the full page (figure and form blocks, the
+`hologram` theme). The tools work on any host with `registry.state`; older
+hosts simply leave out the blocks they do not know.
+
+Then open *The System* and fill in the registration form, or tell Claude
+"set me up in The System: 43, 173 cm, 75 kg, power tower arriving next week".
 
 ## Tools
 
 | Tool | Purpose |
 | --- | --- |
-| `plugin_fitness_create` | Create a `fitness_180` mission |
-| `plugin_fitness_today` | Today's day, phase, workout ID, restrictions, streaks, rules |
-| `plugin_fitness_log_workout` | Record a completed/skipped workout |
-| `plugin_fitness_log_pain` | Record pain (0-10) and update restrictions |
-| `plugin_fitness_log_weight` | Record weight/waist and delta from start |
-| `plugin_fitness_set_equipment` | Update equipment and enabled workout families |
-| `plugin_fitness_status` | Full mission status + progress summary |
+| `plugin_fitness_setup` | Awaken a Hunter: age, height, weight, optional baseline (push-ups, pull-ups, squats…), training days, quest time, time zone, equipment, pain. `reset: true` starts over. |
+| `plugin_fitness_status` | Status Window: rank, level, XP, stats, streak, injuries, ladders, best results, next Gate, next-rank requirements. |
+| `plugin_fitness_today` | Today's quest with targets per set, rest, cues and adjustments. |
+| `plugin_fitness_log` | Log one exercise's sets (`sets: [6, 5, 5]`, or `set1`…`set5`). Unlocks/recalibrates. |
+| `plugin_fitness_complete` | Complete today's training or recovery quest (XP, streak). |
+| `plugin_fitness_pain` | Report pain 0–10 for an area and side; 0 clears it. |
+| `plugin_fitness_profile` | Weight, waist, height, age, name, training days, quest time, evening warning, time zone, equipment. Every change is kept in the history. |
+| `plugin_fitness_gate` | Log Gate trial results; updates bests, ladders and rank. |
+| `plugin_fitness_exercise` | How to do an exercise; without an id, the full catalogue by ladder. |
+| `plugin_fitness_history` | Quests, sets, body measurements, Gates and profile changes for the last N days. |
 
-Tool names are lowercase `snake_case`, matching the registration regex
-`/^plugin_[a-z][a-z0-9_]*$/`.
+The plugin returns facts in English (exercise ids, targets, cues, `[SYSTEM]`
+messages); the LLM explains them to the user in the user's own language.
 
-Workout IDs (e.g. `phase1_fullbody_a`, `phase1_legs_core`,
-`phase2_bench_dumbbell_a`) and restriction message codes (e.g.
-`NO_HEAVY_OVERHEAD_PRESSING`, `SHOULDER_PAIN_HIGH`) are stable contracts the LLM
-translates into instructions.
+## Rules at a glance
 
-## Demo flow
+| | |
+| --- | --- |
+| XP | training quest 100 · recovery 30 · Gate 300 · skill unlock 150 · rank up 500 |
+| Level | level *n* needs 50 · *n* · (*n* − 1) XP |
+| Ranks | E → D → C → B → A → S, decided only at Gates and never lost. Requirements combine test results (e.g. C: 8 pull-ups, 25 push-ups, 8 dips, 45 s hang, 40 s hollow hold) and ladder levels (e.g. C: Bulgarian split squat). Without a tower the pull/dip trials are waived up to rank C. |
+| Stats | STR from pull/push/dip levels and bests · AGI from core and L-sit · VIT from legs and hinge · END from hang time and consistency |
 
-This is the flow exercised by `src/fitness.test.ts`:
-
-1. User creates a 180-day mission.
-2. Plugin stores smoke-free and alcohol-free start dates.
-3. User logs an old right-shoulder issue (`restrictions.shoulder = watch`).
-4. `plugin_fitness_today` → `phase1_fullbody_a` with a `NO_HEAVY_OVERHEAD_PRESSING` watch.
-5. User logs shoulder pain `5/10` → restriction escalates to `avoid`.
-6. Next `plugin_fitness_today` → `phase1_legs_core` with `SHOULDER_PAIN_HIGH`.
-7. User adds a bench + dumbbells (`set_equipment` `bench_dumbbells`).
-8. Plugin enables the `phase2_bench_dumbbell` family.
-9. The LLM explains the workout using the plugin's structured state — e.g.
-   *"Today we skip push and overhead work; do legs and core only. Your right
-   shoulder was 5/10, so keep the streak alive without irritating it."* The
-   plugin never returns that sentence.
-
-Example `plugin_fitness_today` payload (LLM input, not LLM output):
-
-```json
-{
-  "exists": true,
-  "missionId": "mission_abc",
-  "day": 10,
-  "phase": { "number": 1, "name": "foundation", "startedAt": "2026-06-18" },
-  "workoutId": "phase1_legs_core",
-  "restrictions": [
-    { "area": "shoulder", "side": "right", "level": "avoid", "messageCode": "SHOULDER_PAIN_HIGH" }
-  ],
-  "streaks": { "smokeFreeDays": 27, "alcoholFreeDays": 27, "workoutStreakDays": 0 },
-  "rules": { "trainToFailure": false, "repsInReserve": 2, "maxPainAllowed": 4 }
-}
-```
-
-## Deterministic rules
-
-- **Pain** (`src/rules.ts`): `0-2` normal, `3-4` caution, `5+` avoid. High
-  shoulder pain replaces any push day with `phase1_legs_core`.
-- **Phases** by mission day: foundation `1-30`, base_strength `31-75`,
-  progressive_strength `76-135`, definition `136-180`. Advancement is delayed
-  while consistency is low (<4 workouts/14 days), a high-pain restriction is
-  active, or the mission is paused.
-- **Equipment** gates workout families; dumbbell families unlock only once a
-  bench *and* dumbbells are present.
-
-Every rule is a pure function — no IO, no randomness, no language — which is why
-the LLM is the only source of words and the plugin is fully testable.
-
-## Persistence
-
-State is a single JSON object under `registry.state` key `mission`
-(`FitnessPluginState`, `version: 1`). On the host it lives in Shinobi's SQLite
-DB, so it is covered by the pre-migration backup and `shinobi sync`, and works
-behind the stateless remote `/mcp` endpoint. Read-modify-write goes through
-`registry.state.update(...)` so concurrent calls stay atomic. A malformed or
-absent value reads back as "no mission" rather than throwing.
-
-## The plugin contract
-
-This package never imports Shinobi internals. It declares the contract locally:
-
-```ts
-interface PluginStateStore {
-  get<T>(key: string): T | null;
-  set(key: string, value: unknown): void;
-  delete(key: string): void;
-  update<T>(key: string, mutator: (current: T | null) => T): T;
-}
-
-interface PluginRegistry {
-  registerTool(def: PluginToolDef): void;
-  state: PluginStateStore; // scoped to this plugin
-}
-```
-
-A plugin module's default export is `register(registry, api)`. The host owns the
-SQLite-backed implementation; the package depends only on this shape.
+All rules are pure functions in [`src/rules.ts`](src/rules.ts); the catalogue,
+ladders and figure poses are in [`src/exercises.ts`](src/exercises.ts).
 
 ## Development
 
 ```bash
 npm install
-npm run build      # tsc → ./dist
-npm test           # vitest run
-node demo.mjs      # run the full demo flow and print each tool's JSON (needs build first)
+npm test          # vitest: rules, tools, page, every figure
+npm run bundle    # tsc + esbuild → standalone/shinobi-plugin-fitness.mjs (commit it)
+npm run preview   # preview/index.html: every figure, live and frozen across its loop
 ```
 
-## Notes / out of scope
+Figures are generated from key poses (joint angles, or IK targets for hands
+and feet) by [`src/figure.ts`](src/figure.ts) into self-contained SVG with SMIL
+animation. Shinobi draws them as images, so they cannot run script; keep them
+free of external references (`#id` only).
 
-The plugin does not give medical advice and does not replace a trainer, doctor,
-physiotherapist, or dentist. No wearables, nutrition, video, React, external
-APIs, or LLM calls live inside it — by design.
+State is one JSON document under `registry.state` key `hunter` (`version: 2`),
+updated atomically. Sets, quests, events and history are capped so it stays
+small.
+
+## Not medical advice
+
+The System is a general training plan. It does not replace a doctor or a
+physiotherapist; if pain persists, get it looked at and tell the System what
+they said.
 
 ## License
 
